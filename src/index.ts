@@ -45,7 +45,32 @@ function requireToken(req: Request, res: Response, next: NextFunction) {
 // Stateless mode: each request gets a fresh MCP server + transport. Kodi keeps
 // no memory between calls (everything lives in the Sheet), so this is simplest
 // and survives restarts and multiple instances.
+// One log line per MCP request: which tool, the `from` it was given, any
+// `_meta` the client attached, and non-secret headers. This shows what the
+// calling platform actually passes about the sender.
+const SECRET_HEADERS = new Set(["authorization", "cookie", "x-api-key"]);
+function logMcpRequest(req: Request) {
+  const msgs = Array.isArray(req.body) ? req.body : [req.body];
+  const headers = Object.fromEntries(
+    Object.entries(req.headers).filter(
+      ([k]) => !SECRET_HEADERS.has(k) && (k.startsWith("x-") || k === "user-agent" || k.startsWith("mcp-")) && !k.startsWith("x-vercel") && !k.startsWith("x-forwarded"),
+    ),
+  );
+  for (const m of msgs) {
+    if (!m || typeof m !== "object") continue;
+    const p = m.params ?? {};
+    const detail =
+      m.method === "tools/call"
+        ? { tool: p.name, from: p.arguments?.from, arg_keys: Object.keys(p.arguments ?? {}), _meta: p._meta }
+        : m.method === "initialize"
+          ? { client: p.clientInfo, _meta: p._meta }
+          : { _meta: p._meta };
+    console.log(`[kodi] mcp ${m.method} ${JSON.stringify(detail)} headers=${JSON.stringify(headers)}`);
+  }
+}
+
 app.post("/mcp", requireToken, async (req, res) => {
+  logMcpRequest(req);
   const server = buildMcpServer(kodi);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on("close", () => {
