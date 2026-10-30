@@ -83,6 +83,8 @@ English or Swahili. The codes are `unknown_sender`, `not_your_unit`,
 | 12:51 | Fixes for both | `ee93f26` |
 | 12:56 | Simulator: "The agent didn't answer" timeout (issue 4.11); tone feedback (issue 4.12) | |
 | 13:04 | Speed fixes (measured) + tone rewrite | `1aee164` |
+| 13:22 | Agent shows figures without calling `balance`, copied from skill examples (issue 4.13) | |
+| ~13:30 | Skill examples replaced with placeholders | see git log |
 
 ---
 
@@ -304,7 +306,34 @@ Format for each: **what happened → how the cause was found → fix → what Ch
   - name used only in the greeting and payment confirmation
   - good and bad example replies
 
-### 4.13 Demo date caveat
+### 4.13 The agent copied example numbers from the skill instead of calling the tool *(field-note candidate)*
+- **What happened:** even after the tone rewrite, replies kept saying "I've now
+  checked your account, and the figures I gave earlier were right", and offered
+  "KES 9,000 now and KES 9,000 by 20 November" before withdrawing it.
+- **Found:** Kodi's log for that chat:
+  - 13:22:01, after "A1, 4821": **only `whoami` was called**, yet the agent
+    showed a full balance breakdown.
+  - 13:23:06: the first `balance` call.
+
+  The skill's example breakdown used *exactly* Amina's figures (KES 18,000, 0,
+  0, "was due 5 October"), and the plan example was "KES 9,000 now and KES 9,000
+  by 20 November". The agent pasted the examples as if they were data, then
+  "confirmed" them once it really called the tool.
+- **Fix:**
+  - every example in the skill now uses placeholders (`<due_kes>`,
+    `<due_date>`), with no figure matching any tenant
+  - new hard rule: every amount or date must come from a tool called while
+    writing that reply; call `balance` before stating any amount
+  - after sign-in, act on what the person already asked for in the same reply
+- **Lessons:**
+  - Never put realistic data in prompt examples; models treat it as facts.
+  - The tool-call log was the only way to see that the "correct" figures had
+    never been fetched.
+- **Suggestion for Chord:** show tool calls per reply in the simulator, or in
+  "Why this reply", so builders can see when the agent answered without calling
+  a tool.
+
+### 4.14 Demo date caveat
 - Plans are only possible on or before the 20th, and the build day was the 30th,
   so a plan can't be shown succeeding live until the next month. Plans are
   covered by offline tests that use a mid-month clock. In the simulator, the
@@ -357,6 +386,8 @@ Format for each: **what happened → how the cause was found → fix → what Ch
    instead of "The agent didn't answer".
 5. **Define "external-customer tool restrictions".**
 6. **In-app test chat:** say it has no sender, or let builders set one.
+7. **Show tool calls per reply** in the simulator, so builders can see when an
+   answer wasn't backed by a tool call.
 
 ---
 
