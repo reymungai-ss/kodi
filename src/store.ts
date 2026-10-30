@@ -122,3 +122,61 @@ export class MemoryStore implements Store {
     this.tabs[tab] = rows.map((r) => this.clean(tab, r));
   }
 }
+
+/**
+ * Wraps a Store for the length of one tool call. Each tab is read from the
+ * Sheet at most once (reads take ~3s each through Apps Script), and writes
+ * made during the call are applied to the cached copy so later reads in the
+ * same call see them. Never share one across calls: it would serve stale data.
+ */
+export class RequestCache implements Store {
+  private tabs = new Map<TabName, Promise<Row[]>>();
+
+  constructor(private inner: Store) {}
+
+  /** Start reading these tabs now, in parallel. */
+  warm(...tabs: TabName[]) {
+    for (const t of tabs) this.load(t).catch(() => {}); // errors resurface on the real read
+  }
+
+  private load(tab: TabName): Promise<Row[]> {
+    let p = this.tabs.get(tab);
+    if (!p) {
+      p = this.inner.read(tab);
+      this.tabs.set(tab, p);
+      p.catch(() => this.tabs.delete(tab)); // let a later read retry
+    }
+    return p;
+  }
+
+  async read(tab: TabName) {
+    return (await this.load(tab)).map((r) => ({ ...r }));
+  }
+
+  async append(tab: TabName, rows: Row[], uniqueKey?: string) {
+    const res = await this.inner.append(tab, rows, uniqueKey);
+    if (res === "ok" && this.tabs.has(tab)) {
+      const cached = await this.load(tab);
+      cached.push(...rows.map((r) => ({ ...r })));
+    }
+    return res;
+  }
+
+  async update(tab: TabName, match: Row, set: Row, unless?: Row) {
+    const n = await this.inner.update(tab, match, set, unless);
+    if (n > 0 && this.tabs.has(tab)) {
+      const keys = Object.keys(match);
+      for (const row of await this.load(tab)) {
+        if (!keys.every((k) => row[k] === String(match[k]))) continue;
+        if (unless && Object.keys(unless).some((k) => row[k] === String(unless[k]))) continue;
+        Object.assign(row, set);
+      }
+    }
+    return n;
+  }
+
+  async replace(tab: TabName, rows: Row[]) {
+    await this.inner.replace(tab, rows);
+    this.tabs.set(tab, Promise.resolve(rows.map((r) => ({ ...r }))));
+  }
+}

@@ -3,7 +3,9 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { NextFunction, Request, Response } from "express";
 import { loadConfig } from "./config.js";
+import { waitUntil } from "@vercel/functions";
 import { Kodi } from "./kodi.js";
+import { RequestCache } from "./store.js";
 import { buildMcpServer } from "./mcp.js";
 
 // Locally, settings can come from a .env file. On Railway/Render they come from the dashboard.
@@ -14,11 +16,15 @@ try {
 }
 
 const config = loadConfig();
-const kodi = new Kodi({
-  store: config.store,
-  payments: config.payments,
-  emailDomain: process.env.TENANT_EMAIL_DOMAIN?.trim(),
-});
+// A fresh Kodi per request, with its own read cache: each Sheet tab is read
+// at most once per tool call instead of once per step.
+const kodiForRequest = () =>
+  new Kodi({
+    store: new RequestCache(config.store),
+    payments: config.payments,
+    emailDomain: process.env.TENANT_EMAIL_DOMAIN?.trim(),
+    defer: (work) => waitUntil(work),
+  });
 
 // Bound to 0.0.0.0 so Railway/Render can route traffic in. Requests are
 // protected by the bearer token below, not by the hostname.
@@ -72,7 +78,7 @@ function logMcpRequest(req: Request) {
 
 app.post("/mcp", requireToken, async (req, res) => {
   logMcpRequest(req);
-  const server = buildMcpServer(kodi);
+  const server = buildMcpServer(kodiForRequest());
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on("close", () => {
     transport.close();

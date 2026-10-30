@@ -6,7 +6,7 @@ import { Kodi, normalizePhone } from "../src/kodi.js";
 import { FakePaystack } from "../src/paystack.js";
 import { TABS, type TabName } from "../src/schema.js";
 import { seedRows } from "../src/seedData.js";
-import { MemoryStore } from "../src/store.js";
+import { MemoryStore, RequestCache } from "../src/store.js";
 
 const AMINA = "+254 700 000 101"; // A1, en, owes 18,000
 const BRIAN = "0700000102"; // A2, sw, owes 22,000 (18,000 + 4,000 carried)
@@ -127,11 +127,25 @@ describe("main flow", () => {
     assert.ok(pay.ok);
     assert.equal(pay.reference, "KDI-A1-202611-3");
     const rows = store.tabs.payments.filter((p) => p.unit_id === "A1");
-    assert.deepEqual(rows.map((r) => [r.reference, r.status]), [
-      ["KDI-A1-202611-1", "failed"],
-      ["KDI-A1-202611-2", "failed"],
-      ["KDI-A1-202611-3", "pending"],
-    ]);
+    // Taken references are skipped by asking Paystack first, without Sheet writes.
+    assert.deepEqual(rows.map((r) => [r.reference, r.status]), [["KDI-A1-202611-3", "pending"]]);
+  });
+
+  test("with the per-request Sheet cache, writes are seen within the call and by the next call", async () => {
+    let reads = 0;
+    const counting = Object.assign(Object.create(store), { read: (t: TabName) => (reads++, store.read(t)) });
+    const fresh = () => new Kodi({ store: new RequestCache(counting), payments: paystack, now: () => now, log: () => {} });
+    const pay = await fresh().pay(AMINA, 18000);
+    assert.ok(pay.ok);
+    assert.equal(reads, 4); // tenants, charges, payments, plans: once each
+    paystack.pay(pay.reference);
+    const chk = await fresh().check(AMINA);
+    assert.ok(chk.ok);
+    assert.equal(chk.due_kes_after, 0); // computed from the cached copy after the write
+    const bal = await fresh().balance(AMINA);
+    assert.ok(bal.ok);
+    assert.equal(bal.due_kes, 0);
+    assert.equal(successRows(pay.reference), 1);
   });
 
   test("a paid-but-unchecked link is recorded, not reused", async () => {

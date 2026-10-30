@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { fail, type Failure, type Lang } from "./errors.js";
 import { PaystackError, type Payments, type Verified } from "./paystack.js";
-import type { Row } from "./schema.js";
+import type { Row, TabName } from "./schema.js";
 import type { Store } from "./store.js";
 
 // The rent rules for Baraka Court. Each public method is one MCP tool.
@@ -48,6 +48,8 @@ export interface KodiOptions {
   now?: () => Date;
   log?: (msg: string, extra?: unknown) => void;
   emailDomain?: string;
+  /** Lets a write finish after the reply is sent (Vercel's waitUntil). */
+  defer?: (work: Promise<unknown>) => void;
 }
 
 const PLAN_LAST_DAY = 20;
@@ -63,6 +65,7 @@ export class Kodi {
   private now: () => Date;
   private log: (msg: string, extra?: unknown) => void;
   private emailDomain: string;
+  private defer: (work: Promise<unknown>) => void;
 
   constructor(opts: KodiOptions) {
     this.store = opts.store;
@@ -70,11 +73,18 @@ export class Kodi {
     this.now = opts.now ?? (() => new Date());
     this.log = opts.log ?? ((msg, extra) => console.error(`[kodi] ${msg}`, extra ?? ""));
     this.emailDomain = opts.emailDomain || DEFAULT_EMAIL_DOMAIN;
+    this.defer = opts.defer ?? ((work) => void work);
+  }
+
+  /** Starts reading tabs in parallel if the store caches reads (see RequestCache). */
+  private warm(...tabs: TabName[]) {
+    (this.store as Store & { warm?: (...t: TabName[]) => void }).warm?.(...tabs);
   }
 
   // ---- whoami --------------------------------------------------------------
 
   async whoami(who: Caller) {
+    this.warm("tenants");
     const me = await this.resolve(who);
     // An unknown phone number learns only that it's unknown. Wrong or missing
     // house number + PIN gets a sentence asking for them again.
@@ -91,6 +101,7 @@ export class Kodi {
   // ---- balance -------------------------------------------------------------
 
   async balance(who: Caller) {
+    this.warm("tenants", "charges", "payments", "plans_escalations");
     const me = await this.resolve(who);
     if ("ok" in me) return me;
     if (me.role !== "tenant") return fail("not_allowed", me.language, "balance");
@@ -101,6 +112,7 @@ export class Kodi {
   // ---- pay -----------------------------------------------------------------
 
   async pay(who: Caller, amount_kes: number, plan?: Plan) {
+    this.warm("tenants", "charges", "payments", "plans_escalations");
     const me = await this.resolve(who);
     if ("ok" in me) return me;
     if (me.role !== "tenant") return fail("not_allowed", me.language, "pay");
@@ -229,9 +241,14 @@ export class Kodi {
     let reference = "";
     let payment_url = "";
     for (let attempt = 0; attempt < 8 && !payment_url; attempt++, n++) {
+      reference = `KDI-${unit}-${yyyymm}-${n}`;
+      // Asking Paystack is fast (~0.7s); a Sheet write is slow (~4s). Skip
+      // references Paystack already holds before touching the Sheet.
+      const known = await this.payments.verify(reference).catch(() => null);
+      if (known) continue;
+
       // 1. Reserve the reference in the ledger first, so every Paystack link has a row.
       try {
-        reference = `KDI-${unit}-${yyyymm}-${n}`;
         const res = await this.store.append("payments", [
           {
             reference,
@@ -267,9 +284,12 @@ export class Kodi {
     }
     if (!payment_url) return fail("paystack_unavailable", lang);
 
-    // 3. Save the link so it can be reused. If this write fails the link still works.
-    await this.store.update("payments", { reference }, { payment_url }).catch((err) =>
-      this.log(`could not save payment_url for ${reference}`, String(err)),
+    // 3. Save the link so it can be reused, after the reply goes out. If this
+    //    write fails the link still works; it just won't be reused.
+    this.defer(
+      this.store.update("payments", { reference }, { payment_url }).catch((err) =>
+        this.log(`could not save payment_url for ${reference}`, String(err)),
+      ),
     );
     return { reference, payment_url };
   }
@@ -277,6 +297,7 @@ export class Kodi {
   // ---- check ---------------------------------------------------------------
 
   async check(who: Caller, reference?: string) {
+    this.warm("tenants", "charges", "payments", "plans_escalations");
     const me = await this.resolve(who);
     if ("ok" in me) return me;
     const lang = me.language;
@@ -376,6 +397,7 @@ export class Kodi {
   // ---- report --------------------------------------------------------------
 
   async report(who: Caller, month?: string) {
+    this.warm("tenants", "units", "charges", "payments", "plans_escalations");
     const me = await this.resolve(who);
     if ("ok" in me) return me;
     if (me.role === "tenant") return fail("not_allowed", me.language, "report");
@@ -431,6 +453,7 @@ export class Kodi {
   // ---- escalate ------------------------------------------------------------
 
   async escalate(who: Caller, reason: string, summary: string, unit_id?: string) {
+    this.warm("tenants");
     const me = await this.resolve(who);
     if ("ok" in me) return me;
     const lang = me.language;
