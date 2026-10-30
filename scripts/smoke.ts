@@ -111,6 +111,14 @@ async function main() {
   const esc = await call("escalate", { from: AMINA, reason: "smoke_test", summary: "Automated smoke test ticket. Safe to close." });
   expect("escalate: returns ticket_id", esc.ok && /^ESC-/.test(esc.ticket_id), esc);
 
+  // House number + PIN sign-in (for channels that don't reveal the number).
+  const badPin = await call("whoami", { account: "A1", pin: "0000" });
+  expect("wrong PIN is refused", badPin.ok === false && badPin.code === "unknown_sender", badPin);
+  const pinWho = await call("whoami", { account: "A1", pin: "4821" });
+  expect("house number + PIN: tenant A1", pinWho.role === "tenant" && pinWho.unit_id === "A1", pinWho);
+  const pinBal = await call("balance", { account: "A1", pin: "4821" });
+  expect("house number + PIN: balance works", pinBal.ok && typeof pinBal.due_kes === "number", pinBal);
+
   // 3. Error cases.
   const isErr = (r: any, code: string) => r.ok === false && r.code === code && typeof r.say === "string" && r.say.length > 0;
 

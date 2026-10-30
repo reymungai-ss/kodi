@@ -8,7 +8,10 @@ export const TABS = {
 
   // Everyone allowed to talk to Kodi: tenants, the landlord and the caretaker.
   // `phone` is the WhatsApp number in international form, digits only (2547...).
-  tenants: ["phone", "name", "role", "unit_id", "language", "active"],
+  // `pin` lets people sign in with house number + PIN when the chat channel
+  // doesn't reveal their number. `pin_failures` counts wrong tries; at 5 the
+  // account locks until someone sets it back to 0.
+  tenants: ["phone", "name", "role", "unit_id", "language", "active", "pin", "pin_failures"],
 
   // What each unit owes for a month. `carried_kes` is arrears brought forward.
   charges: ["unit_id", "month", "rent_kes", "carried_kes", "due_date"],

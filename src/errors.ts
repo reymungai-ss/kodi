@@ -28,6 +28,14 @@ const MESSAGES: Messages = {
     en: "Sorry, I don't recognise this number. If you live at Baraka Court, please ask the caretaker to register it.",
     sw: "Samahani, sitambui nambari hii. Kama unaishi Baraka Court, tafadhali mwombe msimamizi aisajili.",
   },
+  "unknown_sender.need_pin": {
+    en: "To look up your account, please send your house number and your PIN, for example: A1, 1234.",
+    sw: "Ili kuangalia akaunti yako, tafadhali tuma nambari ya nyumba yako na PIN yako, kwa mfano: A1, 1234.",
+  },
+  "unknown_sender.bad_pin": {
+    en: "Sorry, that house number and PIN don't match. Please check them and try again, or ask the caretaker for your PIN.",
+    sw: "Samahani, nambari ya nyumba na PIN hazilingani. Tafadhali zikague ujaribu tena, au mwombe msimamizi PIN yako.",
+  },
   not_your_unit: {
     en: "Sorry, I can only share details about your own unit.",
     sw: "Samahani, ninaweza kutoa taarifa za nyumba yako pekee.",
@@ -35,6 +43,10 @@ const MESSAGES: Messages = {
   not_allowed: {
     en: "Sorry, that isn't something I can do for you.",
     sw: "Samahani, siwezi kukusaidia na hilo.",
+  },
+  "not_allowed.locked": {
+    en: "This account is locked after too many wrong PINs. Please ask the caretaker to unlock it.",
+    sw: "Akaunti hii imefungwa baada ya PIN zisizo sahihi mara nyingi. Tafadhali mwombe msimamizi aifungue.",
   },
   "not_allowed.report": {
     en: "Sorry, the building report is only for the landlord or caretaker.",

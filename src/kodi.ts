@@ -17,6 +17,9 @@ export interface Person {
   language: Lang;
 }
 
+/** Who is calling: a WhatsApp number, or a house number + PIN. */
+export type Caller = string | { from?: string; account?: string; pin?: string };
+
 export interface Plan {
   second_amount_kes: number;
   second_date: string; // YYYY-MM-DD
@@ -47,6 +50,7 @@ export interface KodiOptions {
 }
 
 const PLAN_LAST_DAY = 20;
+const MAX_PIN_FAILURES = 5;
 // Paystack needs an email per payment. ".test" is rejected by Paystack's
 // validator, so the default uses example.com, which is reserved and never
 // delivers mail. Override with TENANT_EMAIL_DOMAIN.
@@ -69,9 +73,11 @@ export class Kodi {
 
   // ---- whoami --------------------------------------------------------------
 
-  async whoami(from: string) {
-    const me = await this.identify(from);
-    if (!me) return { ok: true as const, role: "unknown" as const };
+  async whoami(who: Caller) {
+    const me = await this.resolve(who);
+    // An unknown phone number learns only that it's unknown. Wrong or missing
+    // house number + PIN gets a sentence asking for them again.
+    if ("ok" in me) return usesPin(who) || !callerPhone(who) ? me : { ok: true as const, role: "unknown" as const };
     return {
       ok: true as const,
       role: me.role,
@@ -83,9 +89,9 @@ export class Kodi {
 
   // ---- balance -------------------------------------------------------------
 
-  async balance(from: string) {
-    const me = await this.identify(from);
-    if (!me) return fail("unknown_sender");
+  async balance(who: Caller) {
+    const me = await this.resolve(who);
+    if ("ok" in me) return me;
     if (me.role !== "tenant") return fail("not_allowed", me.language, "balance");
     const ledger = await this.ledger(me.unit_id);
     return { ok: true as const, unit_id: me.unit_id, ...ledger };
@@ -93,9 +99,9 @@ export class Kodi {
 
   // ---- pay -----------------------------------------------------------------
 
-  async pay(from: string, amount_kes: number, plan?: Plan) {
-    const me = await this.identify(from);
-    if (!me) return fail("unknown_sender");
+  async pay(who: Caller, amount_kes: number, plan?: Plan) {
+    const me = await this.resolve(who);
+    if ("ok" in me) return me;
     if (me.role !== "tenant") return fail("not_allowed", me.language, "pay");
     const lang = me.language;
     const unit = me.unit_id;
@@ -266,9 +272,9 @@ export class Kodi {
 
   // ---- check ---------------------------------------------------------------
 
-  async check(from: string, reference?: string) {
-    const me = await this.identify(from);
-    if (!me) return fail("unknown_sender");
+  async check(who: Caller, reference?: string) {
+    const me = await this.resolve(who);
+    if ("ok" in me) return me;
     const lang = me.language;
     const isStaff = me.role !== "tenant";
 
@@ -365,9 +371,9 @@ export class Kodi {
 
   // ---- report --------------------------------------------------------------
 
-  async report(from: string, month?: string) {
-    const me = await this.identify(from);
-    if (!me) return fail("unknown_sender");
+  async report(who: Caller, month?: string) {
+    const me = await this.resolve(who);
+    if ("ok" in me) return me;
     if (me.role === "tenant") return fail("not_allowed", me.language, "report");
 
     const [units, tenants, charges, payments, plans] = await Promise.all([
@@ -420,9 +426,9 @@ export class Kodi {
 
   // ---- escalate ------------------------------------------------------------
 
-  async escalate(from: string, reason: string, summary: string, unit_id?: string) {
-    const me = await this.identify(from);
-    if (!me) return fail("unknown_sender");
+  async escalate(who: Caller, reason: string, summary: string, unit_id?: string) {
+    const me = await this.resolve(who);
+    if ("ok" in me) return me;
     const lang = me.language;
 
     let unit = unit_id?.trim().toUpperCase() || "";
@@ -456,22 +462,54 @@ export class Kodi {
 
   // ---- shared helpers ------------------------------------------------------
 
-  async identify(from: string): Promise<Person | null> {
-    const phone = normalizePhone(from);
-    if (!phone) return null;
+  /**
+   * Works out who is asking. Two ways in:
+   * - `from`: a WhatsApp number supplied by the channel (trusted when the
+   *   platform provides it);
+   * - `account` + `pin`: a house number (or "landlord"/"caretaker") plus the
+   *   PIN from the tenants tab, for channels that don't reveal the number.
+   * After MAX_PIN_FAILURES wrong PINs the account locks until someone clears
+   * `pin_failures` in the Sheet.
+   */
+  async resolve(who: Caller): Promise<Person | Failure> {
+    if (usesPin(who)) return this.byPin(who.account!, who.pin!);
+    const phone = normalizePhone(callerPhone(who));
+    if (!phone) return fail("unknown_sender", "en", "need_pin");
     const tenants = await this.store.read("tenants");
     const t = tenants.find((r) => normalizePhone(r.phone) === phone && isActive(r));
-    if (!t) return null;
-    const role = t.role.trim().toLowerCase();
-    if (role !== "tenant" && role !== "landlord" && role !== "caretaker") return null;
-    if (role === "tenant" && !t.unit_id) return null;
-    return {
-      phone,
-      name: t.name,
-      role,
-      unit_id: t.unit_id.trim().toUpperCase(),
-      language: t.language.trim().toLowerCase() === "sw" ? "sw" : "en",
-    };
+    return (t && toPerson(t)) || fail("unknown_sender");
+  }
+
+  private async byPin(accountRaw: string, pinRaw: string): Promise<Person | Failure> {
+    const account = accountRaw.trim().toUpperCase().replace(/^(HOUSE|UNIT|FLAT)\s*/, "");
+    const pin = pinRaw.trim();
+    const tenants = await this.store.read("tenants");
+    const candidates = tenants.filter((r) => {
+      if (!isActive(r)) return false;
+      const role = r.role.trim().toLowerCase();
+      if (role === "tenant") return r.unit_id.trim().toUpperCase() === account;
+      return role === account.toLowerCase() && (role === "landlord" || role === "caretaker");
+    });
+    const lang = candidates[0]?.language.trim().toLowerCase() === "sw" ? "sw" : "en";
+    if (candidates.some((r) => toInt(r.pin_failures) >= MAX_PIN_FAILURES)) {
+      return fail("not_allowed", lang, "locked");
+    }
+
+    const match = /^\d{4,8}$/.test(pin) ? candidates.find((r) => (r.pin ?? "").trim() === pin) : undefined;
+    if (!match) {
+      // Count the miss against every account it could have been for. Unknown
+      // house numbers get the same answer, so nothing is revealed.
+      for (const r of candidates) {
+        await this.store
+          .update("tenants", { phone: r.phone }, { pin_failures: String(toInt(r.pin_failures) + 1) })
+          .catch((err) => this.log("could not count PIN failure", String(err)));
+      }
+      return fail("unknown_sender", lang, "bad_pin");
+    }
+    if (toInt(match.pin_failures) > 0) {
+      await this.store.update("tenants", { phone: match.phone }, { pin_failures: "0" }).catch(() => 0);
+    }
+    return toPerson(match) ?? fail("unknown_sender", lang, "bad_pin");
   }
 
   private async ledger(unit: string): Promise<Ledger> {
@@ -515,6 +553,27 @@ export function normalizePhone(raw: string | undefined): string {
   if (d.length === 10 && d.startsWith("0")) d = "254" + d.slice(1);
   if (d.length === 9 && /^[17]/.test(d)) d = "254" + d;
   return d.length >= 9 ? d : "";
+}
+
+function usesPin(who: Caller): who is { account: string; pin: string } {
+  return typeof who === "object" && Boolean(who.account?.trim()) && Boolean(who.pin?.trim());
+}
+
+function callerPhone(who: Caller): string {
+  return typeof who === "string" ? who : (who.from ?? "");
+}
+
+function toPerson(t: Row): Person | null {
+  const role = t.role.trim().toLowerCase();
+  if (role !== "tenant" && role !== "landlord" && role !== "caretaker") return null;
+  if (role === "tenant" && !t.unit_id) return null;
+  return {
+    phone: normalizePhone(t.phone) || t.phone,
+    name: t.name,
+    role,
+    unit_id: t.unit_id.trim().toUpperCase(),
+    language: t.language.trim().toLowerCase() === "sw" ? "sw" : "en",
+  };
 }
 
 function toInt(v: string | undefined): number {

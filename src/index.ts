@@ -45,7 +45,8 @@ function requireToken(req: Request, res: Response, next: NextFunction) {
 // Stateless mode: each request gets a fresh MCP server + transport. Kodi keeps
 // no memory between calls (everything lives in the Sheet), so this is simplest
 // and survives restarts and multiple instances.
-// One log line per MCP request: which tool, the `from` it was given, any
+// One log line per MCP request: which tool, the `from`/`account` it was given
+// (never the PIN), any
 // `_meta` the client attached, and non-secret headers. This shows what the
 // calling platform actually passes about the sender.
 const SECRET_HEADERS = new Set(["authorization", "cookie", "x-api-key"]);
@@ -61,7 +62,7 @@ function logMcpRequest(req: Request) {
     const p = m.params ?? {};
     const detail =
       m.method === "tools/call"
-        ? { tool: p.name, from: p.arguments?.from, arg_keys: Object.keys(p.arguments ?? {}), _meta: p._meta }
+        ? { tool: p.name, from: p.arguments?.from, account: p.arguments?.account, pin_given: Boolean(p.arguments?.pin), _meta: p._meta }
         : m.method === "initialize"
           ? { client: p.clientInfo, _meta: p._meta }
           : { _meta: p._meta };

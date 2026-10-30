@@ -282,6 +282,83 @@ describe("error cases", () => {
   });
 });
 
+describe("house number + PIN sign-in", () => {
+  const code = (r: { ok: boolean }) => (r.ok ? "ok" : (r as { code: string }).code);
+  const failures = (unit: string) => store.tabs.tenants.find((t) => t.unit_id === unit)?.pin_failures;
+
+  test("a tenant can do the whole flow with house number + PIN", async () => {
+    const me = { account: "a1", pin: "4821" };
+    assert.deepEqual(await kodi.whoami(me), { ok: true, role: "tenant", unit_id: "A1", name: "Amina Wanjiru", language: "en" });
+    const bal = await kodi.balance(me);
+    assert.ok(bal.ok);
+    assert.equal(bal.due_kes, 18000);
+    const pay = await kodi.pay(me, 18000);
+    assert.ok(pay.ok);
+    paystack.pay(pay.reference);
+    const chk = await kodi.check(me);
+    assert.ok(chk.ok);
+    assert.equal(chk.due_kes_after, 0);
+    // The payment row records the tenant's registered number, not anything typed.
+    assert.equal(store.tabs.payments.at(-1)?.from, "254700000101");
+  });
+
+  test("'House A1' and spaces are accepted", async () => {
+    const r = await kodi.whoami({ account: " House A1 ", pin: " 4821 " });
+    assert.equal(r.ok && "unit_id" in r && r.unit_id, "A1");
+  });
+
+  test("staff sign in with their role name", async () => {
+    const r = await kodi.report({ account: "Landlord", pin: "9001" });
+    assert.ok(r.ok);
+    assert.equal(code(await kodi.report({ account: "caretaker", pin: "9001" })), "unknown_sender");
+  });
+
+  test("a PIN only works for its own house", async () => {
+    // B2's PIN with A1's house number is just a wrong PIN.
+    const r = await kodi.balance({ account: "A1", pin: "7352" });
+    assert.equal(code(r), "unknown_sender");
+    assert.match((r as { say: string }).say, /don't match/);
+  });
+
+  test("wrong PIN, unknown house and inactive tenant all get the same answer", async () => {
+    const a = await kodi.whoami({ account: "A1", pin: "0000" });
+    const b = await kodi.whoami({ account: "Z9", pin: "1234" });
+    const c = await kodi.whoami({ account: "B3", pin: "0000" });
+    assert.deepEqual(a, b);
+    assert.deepEqual(b, c);
+  });
+
+  test("no number and no PIN: ask for them", async () => {
+    const r = await kodi.balance({});
+    assert.equal(code(r), "unknown_sender");
+    assert.match((r as { say: string }).say, /house number and your PIN/);
+    assert.equal(code(await kodi.whoami({ account: "A1" })), "unknown_sender");
+  });
+
+  test("5 wrong PINs lock the account, even with the right PIN; clearing the count unlocks it", async () => {
+    for (let i = 0; i < 5; i++) await kodi.whoami({ account: "A2", pin: "1111" });
+    assert.equal(failures("A2"), "5");
+    const locked = await kodi.balance({ account: "A2", pin: "3907" });
+    assert.equal(code(locked), "not_allowed");
+    assert.match((locked as { say: string }).say, /imefungwa/); // Brian prefers Swahili
+    store.tabs.tenants.find((t) => t.unit_id === "A2")!.pin_failures = "0";
+    assert.ok((await kodi.balance({ account: "A2", pin: "3907" })).ok);
+  });
+
+  test("a correct PIN resets earlier misses", async () => {
+    await kodi.whoami({ account: "B1", pin: "1111" });
+    assert.equal(failures("B1"), "1");
+    await kodi.whoami({ account: "B1", pin: "2689" });
+    assert.equal(failures("B1"), "0");
+  });
+
+  test("a tenant signed in by PIN still can't reach another unit", async () => {
+    const me = { account: "A1", pin: "4821" };
+    assert.equal(code(await kodi.check(me, "KDI-B1-202611-1")), "not_your_unit");
+    assert.equal(code(await kodi.report(me)), "not_allowed");
+  });
+});
+
 test("phone numbers in any common format", () => {
   for (const p of ["+254712345678", "254712345678", "0712345678", "712345678", "whatsapp:+254 712 345 678"]) {
     assert.equal(normalizePhone(p), "254712345678");

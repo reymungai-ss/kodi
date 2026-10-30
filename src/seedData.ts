@@ -1,7 +1,7 @@
 import type { Row, TabName } from "./schema.js";
 import { nairobiMonth } from "./kodi.js";
 
-// Sample data for Baraka Court. All phone numbers are fake (2547000001xx).
+// Sample data for Baraka Court. All phone numbers and PINs are made up.
 // Charges and sample payments are dated to the month you run the seed in.
 // Replace this with the real seed table when you have it.
 export function seedRows(now: Date): Record<TabName, Row[]> {
@@ -19,14 +19,14 @@ export function seedRows(now: Date): Record<TabName, Row[]> {
       { unit_id: "B3", floor: "2nd", monthly_rent_kes: "25000", status: "vacant" },
     ],
     tenants: [
-      { phone: "254700000101", name: "Amina Wanjiru", role: "tenant", unit_id: "A1", language: "en", active: "yes" },
-      { phone: "254700000102", name: "Brian Otieno", role: "tenant", unit_id: "A2", language: "sw", active: "yes" },
-      { phone: "254700000103", name: "Grace Muthoni", role: "tenant", unit_id: "A3", language: "en", active: "yes" },
-      { phone: "254700000104", name: "Hassan Ali", role: "tenant", unit_id: "B1", language: "sw", active: "yes" },
-      { phone: "254700000105", name: "Faith Chebet", role: "tenant", unit_id: "B2", language: "en", active: "yes" },
-      { phone: "254700000199", name: "Former Tenant", role: "tenant", unit_id: "B3", language: "en", active: "no" },
-      { phone: "254700000901", name: "Mr. Kamau", role: "landlord", unit_id: "", language: "en", active: "yes" },
-      { phone: "254700000902", name: "Joseph Njoroge", role: "caretaker", unit_id: "", language: "sw", active: "yes" },
+      { phone: "254700000101", name: "Amina Wanjiru", role: "tenant", unit_id: "A1", language: "en", active: "yes", pin: "4821", pin_failures: "0" },
+      { phone: "254700000102", name: "Brian Otieno", role: "tenant", unit_id: "A2", language: "sw", active: "yes", pin: "3907", pin_failures: "0" },
+      { phone: "254700000103", name: "Grace Muthoni", role: "tenant", unit_id: "A3", language: "en", active: "yes", pin: "5164", pin_failures: "0" },
+      { phone: "254700000104", name: "Hassan Ali", role: "tenant", unit_id: "B1", language: "sw", active: "yes", pin: "2689", pin_failures: "0" },
+      { phone: "254700000105", name: "Faith Chebet", role: "tenant", unit_id: "B2", language: "en", active: "yes", pin: "7352", pin_failures: "0" },
+      { phone: "254700000199", name: "Former Tenant", role: "tenant", unit_id: "B3", language: "en", active: "no", pin: "0000", pin_failures: "0" },
+      { phone: "254700000901", name: "Mr. Kamau", role: "landlord", unit_id: "", language: "en", active: "yes", pin: "9001", pin_failures: "0" },
+      { phone: "254700000902", name: "Joseph Njoroge", role: "caretaker", unit_id: "", language: "sw", active: "yes", pin: "9002", pin_failures: "0" },
     ],
     charges: [
       { unit_id: "A1", month, rent_kes: "18000", carried_kes: "0", due_date: `${month}-05` },
