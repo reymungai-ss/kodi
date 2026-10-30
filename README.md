@@ -129,6 +129,19 @@ Needs Node.js 20+, a Google Sheet, and a Paystack test secret key.
 | `test/flow.test.ts` | Offline tests: main flow, all error codes, outages, PIN rules |
 | `scripts/` | `seed`, `reset`, and `smoke` (a live MCP client) |
 
+## What I'd build next
+
+1. **Automatic receipts via Paystack webhooks.** Record a payment the moment
+   Paystack confirms it, and send the tenant a receipt without waiting for
+   them to say "I've paid".
+2. **An M-Pesa prompt sent straight to the tenant's phone,** so they approve
+   the payment with their PIN instead of opening a link.
+3. **Drop the PIN once Chord passes verified sender identity to tools,** and
+   identify tenants by their WhatsApp number instead.
+4. **A monthly reminder** via Chord schedules and an approved WhatsApp template.
+5. **An SMS fallback** for tenants who don't reply on WhatsApp.
+6. **A weekly landlord digest:** who has paid, who owes, and open tickets.
+
 ## How I used AI tools
 
 > **Edit this to describe how you actually worked.** A factual starting point:
