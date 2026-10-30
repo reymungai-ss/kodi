@@ -86,6 +86,7 @@ English or Swahili. The codes are `unknown_sender`, `not_your_unit`,
 | 13:22 | Agent shows figures without calling `balance`, copied from skill examples (issue 4.13) | |
 | ~13:30 | Skill examples replaced with placeholders | see git log |
 | 13:28 | Swahili chat switched to English after sign-in (issue 4.14) | |
+| 13:31 | Agent disowns a real ticket; repeats "figures are correct" (issue 4.15) | |
 
 ---
 
@@ -351,7 +352,40 @@ Format for each: **what happened → how the cause was found → fix → what Ch
 - **Lesson:** a stored preference is a default, not an override; in chat, what
   the person does right now wins.
 
-### 4.15 Demo date caveat
+### 4.15 Prompt rules alone couldn't stop the agent re-checking and narrating *(field-note candidate)*
+- **What happened:** even with banned phrases in the skill, replies said "The
+  figures are correct, Amina", repeated the balance each turn, and once said
+  "The ticket number I gave earlier isn't confirmed, so please don't rely on
+  it". That ticket was real.
+- **Found:** Kodi's log for the chat:
+  - 13:30:33–38: `whoami`, `balance` and **`escalate`**, so ticket
+    `ESC-20261030-4EA0` was really created.
+  - 13:31:00: `whoami` and `balance` only, then the agent disowned the ticket.
+  - Every turn called `whoami` + `balance`, despite "don't call whoami again".
+
+  Same root cause as 4.10: earlier tool results aren't replayed, so the agent
+  sees its own claims without evidence. The rule added in 4.13 ("every amount
+  must come from a tool called in this reply") pushed it to re-check and then
+  comment on the check.
+- **Fix (server + skill), working with how Chord behaves rather than against it:**
+  - `whoami` now also returns `latest_payment` (reference, amount, status, link)
+    and `open_tickets`. The agent calls it every turn anyway, so it now *sees*,
+    every turn, that the earlier link and ticket are real.
+  - The skill now says: call `whoami` first each reply; earlier messages are true;
+    answer only the latest message.
+  - A short hard list of phrases it must never write.
+  - No duplicate tickets when one is already open.
+  - The rule from 4.13 is relaxed to "amounts come from tool results, this
+    reply's or ones already stated".
+  - New test.
+- **Lessons:**
+  - When the platform drops context, put the context back through a tool the
+    model already calls, instead of adding more instructions.
+  - Rules that demand proof make a model narrate its proof.
+- **Suggestion for Chord:** include tool results (or a compact summary) in
+  replayed history, or offer per-thread memory that tools can write to.
+
+### 4.16 Demo date caveat
 - Plans are only possible on or before the 20th, and the build day was the 30th,
   so a plan can't be shown succeeding live until the next month. Plans are
   covered by offline tests that use a mid-month clock. In the simulator, the
@@ -404,7 +438,9 @@ Format for each: **what happened → how the cause was found → fix → what Ch
    instead of "The agent didn't answer".
 5. **Define "external-customer tool restrictions".**
 6. **In-app test chat:** say it has no sender, or let builders set one.
-7. **Show tool calls per reply** in the simulator, so builders can see when an
+7. **Include tool results in replayed history**, or a per-thread memory tools
+   can write to; without it agents doubt their own earlier replies.
+8. **Show tool calls per reply** in the simulator, so builders can see when an
    answer wasn't backed by a tool call.
 
 ---

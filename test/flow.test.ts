@@ -38,7 +38,7 @@ const successRows = (ref: string) =>
 describe("main flow", () => {
   test("whoami → balance → pay → check (unpaid) → pay at Paystack → check → recorded once", async () => {
     assert.deepEqual(await kodi.whoami(AMINA), {
-      ok: true, role: "tenant", unit_id: "A1", name: "Amina Wanjiru", language: "en",
+      ok: true, role: "tenant", unit_id: "A1", name: "Amina Wanjiru", language: "en", latest_payment: null, open_tickets: [],
     });
 
     const bal = await kodi.balance(AMINA);
@@ -197,6 +197,22 @@ describe("main flow", () => {
     assert.ok(c.ok);
   });
 
+  test("whoami shows the latest link and open tickets, so earlier replies can be trusted", async () => {
+    const pay = await kodi.pay(AMINA, 7000);
+    assert.ok(pay.ok);
+    const t = await kodi.escalate(AMINA, "wants_human", "Asked to talk to John.");
+    assert.ok(t.ok);
+    await kodi.escalate(FAITH, "repair", "Leaking tap."); // another unit: must not show for Amina
+    const me = await kodi.whoami({ account: "A1", pin: "4821" });
+    assert.ok(me.ok && "latest_payment" in me);
+    assert.deepEqual(me.latest_payment, { reference: pay.reference, amount_kes: 7000, status: "pending", payment_url: pay.payment_url });
+    assert.deepEqual(me.open_tickets.map((x) => x.ticket_id), [t.ticket_id]);
+    const staff = await kodi.whoami(CARETAKER);
+    assert.ok(staff.ok && "open_tickets" in staff);
+    assert.equal(staff.open_tickets.length, 2);
+    assert.equal(staff.latest_payment, null);
+  });
+
   test("escalate creates a ticket", async () => {
     const t = await kodi.escalate(HASSAN, "repair", "Water leaking in the bathroom.");
     assert.ok(t.ok);
@@ -317,7 +333,9 @@ describe("house number + PIN sign-in", () => {
 
   test("a tenant can do the whole flow with house number + PIN", async () => {
     const me = { account: "a1", pin: "4821" };
-    assert.deepEqual(await kodi.whoami(me), { ok: true, role: "tenant", unit_id: "A1", name: "Amina Wanjiru", language: "en" });
+    assert.deepEqual(await kodi.whoami(me), {
+      ok: true, role: "tenant", unit_id: "A1", name: "Amina Wanjiru", language: "en", latest_payment: null, open_tickets: [],
+    });
     const bal = await kodi.balance(me);
     assert.ok(bal.ok);
     assert.equal(bal.due_kes, 18000);

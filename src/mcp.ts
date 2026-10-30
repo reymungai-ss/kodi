@@ -42,7 +42,7 @@ export function buildMcpServer(kodi: Kodi): McpServer {
   server.registerTool(
     "whoami",
     {
-      description: "Who is this person? Pass `from`, or `account` + `pin`. Returns role (tenant | landlord | caretaker | unknown), unit_id, name and language (en | sw). A wrong house number/PIN returns ok:false with a `say` asking them to try again; 5 wrong PINs lock the account.",
+      description: "Who is this person? Pass `from`, or `account` + `pin`. Returns role (tenant | landlord | caretaker | unknown), unit_id, name, language (en | sw), latest_payment (their most recent link: reference, amount_kes, status, payment_url) and open_tickets. Call it at the start of each reply to see what earlier messages referred to. A wrong house number/PIN returns ok:false with a `say` asking them to try again; 5 wrong PINs lock the account.",
       inputSchema: { ...identity },
       annotations: { readOnlyHint: true },
     },

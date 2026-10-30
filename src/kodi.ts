@@ -84,17 +84,38 @@ export class Kodi {
   // ---- whoami --------------------------------------------------------------
 
   async whoami(who: Caller) {
-    this.warm("tenants");
+    this.warm("tenants", "payments", "plans_escalations");
     const me = await this.resolve(who);
     // An unknown phone number learns only that it's unknown. Wrong or missing
     // house number + PIN gets a sentence asking for them again.
     if ("ok" in me) return usesPin(who) || !callerPhone(who) ? me : { ok: true as const, role: "unknown" as const };
+
+    // Chord shows the agent its earlier messages but not the tool results
+    // behind them. Returning the latest link and open tickets here lets the
+    // agent see, on every turn, that references it mentioned before are real.
+    const [payments, tickets] = await Promise.all([this.store.read("payments"), this.store.read("plans_escalations")]);
+    const isTenant = me.role === "tenant";
+    const latest = isTenant ? payments.filter((p) => p.unit_id === me.unit_id && p.status !== "failed").at(-1) : undefined;
+    const open = tickets
+      .filter((t) => t.kind === "escalation" && t.status === "open" && (!isTenant || t.unit_id === me.unit_id))
+      .slice(-5)
+      .map((t) => ({ ticket_id: t.id, unit_id: t.unit_id || null, reason: t.reason, created_at: t.created_at }));
+
     return {
       ok: true as const,
       role: me.role,
       unit_id: me.unit_id || null,
       name: me.name,
       language: me.language,
+      latest_payment: latest
+        ? {
+            reference: latest.reference,
+            amount_kes: toInt(latest.amount_kes),
+            status: latest.status,
+            payment_url: latest.payment_url || null,
+          }
+        : null,
+      open_tickets: open,
     };
   }
 
