@@ -90,6 +90,7 @@ English or Swahili. The codes are `unknown_sender`, `not_your_unit`,
 | 14:59 | Reply produced with no tool calls; agent declares everything fake (issue 4.16) | |
 | ~15:30 | Chord API: "PAID" reply had `tools_used` none, ran on the tool loop (not fallback); every reply is a fresh run | |
 | 15:19 | v10 chat: tools on every reply, but a plan offered on the 30th, a meta comment, backticks (issue 4.17) | |
+| 15:26 | v11 verified via Chord API: clean flow, tools on every reply | `949bb7b` |
 
 ---
 
@@ -471,6 +472,13 @@ Format for each: **what happened → how the cause was found → fix → what Ch
     the tool, and let the model only phrase it.
   - Quoting a forbidden phrase in a prompt can make the model more likely to
     say it.
+
+- **Verified (v11, 15:26–15:27):** Chord's API showed every reply on v11.
+  - The balance and plan replies called `whoami` + `balance`, and the link
+    reply called `pay`.
+  - The plan reply followed `plan.reason: past_20th` ("too late for one this
+    month… how much would you like to pay?"), with no plan amounts.
+  - No backticks, and no comments on earlier messages.
 
 ### 4.18 Demo date caveat
 - Plans are only possible on or before the 20th, and the build day was the 30th,
