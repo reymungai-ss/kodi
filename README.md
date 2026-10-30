@@ -129,28 +129,38 @@ Needs Node.js 20+, a Google Sheet, and a Paystack test secret key.
 | `test/flow.test.ts` | Offline tests: main flow, all error codes, outages, PIN rules |
 | `scripts/` | `seed`, `reset`, and `smoke` (a live MCP client) |
 
-## What I'd build next
-
-1. **Automatic receipts via Paystack webhooks.** Record a payment the moment
-   Paystack confirms it, and send the tenant a receipt without waiting for
-   them to say "I've paid".
-2. **An M-Pesa prompt sent straight to the tenant's phone,** so they approve
-   the payment with their PIN instead of opening a link.
-3. **Drop the PIN once Chord passes verified sender identity to tools,** and
-   identify tenants by their WhatsApp number instead.
-4. **A monthly reminder** via Chord schedules and an approved WhatsApp template.
-5. **An SMS fallback** for tenants who don't reply on WhatsApp.
-6. **A weekly landlord digest:** who has paid, who owes, and open tickets.
-
 ## How I used AI tools
 
-> **Edit this to describe how you actually worked.** A factual starting point:
->
-> I used Claude Code (Anthropic) as a pair programmer. I wrote the
-> specification (tools, payment rules, error codes, and the Sheet + Apps Script
-> approach), and Claude Code wrote most of the server, the Apps Script, the
-> tests and the first draft of the skill. I ran every deploy, seed and
-> simulator test myself, and debugged with it: reading Vercel logs, adding
-> request logging to see what Chord actually sends, and redesigning sign-in
-> (house number + PIN) when the simulator turned out not to pass the sender's
-> number. The field notes are my own account of those problems.
+I'm a product and strategy person, not a developer, so I used AI deliberately
+and kept the decisions mine.
+
+- **Claude (chat)** helped me research the problem and evidence, and turn my
+  own experience of paying and collecting rent, and my frameworks (Signal
+  Stack, Friction Map, Build Threshold), into the concept note, PRD,
+  architecture spec and first skill draft.
+- **Claude Code** wrote the server, the Apps Script bridge, the tests and
+  scripts, and drafts of the skill and docs, from my spec. It ran tests, read
+  Vercel logs and Chord's API, measured latency and proposed fixes.
+- **I** wrote the spec (tools, payment rules, error codes, the Sheet
+  approach), deployed the Apps Script, provided the keys, ran the seed and the
+  first deploys, created the Chord teammate, connected the MCP server,
+  published every skill version from v1 to v11, and ran every simulator test.
+  I spotted the conversation problems (repetition, tone, switching language,
+  narrating its checks) and decided how to fix them, including the switch to
+  PIN sign-in.
+
+Every problem in the field notes was found by running the real system, not
+in planning.
+
+## What I'd build next
+
+- Automatic receipts through Paystack webhooks, so tenants never have to say
+  "I've paid"
+- An M-Pesa prompt sent straight to the tenant's phone, so they pay without
+  leaving the chat
+- Dropping the PIN once Chord passes verified sender identity to tools
+- A monthly reminder through Chord schedules and an approved WhatsApp template
+- Alerts to the caretaker for tickets and lockouts
+- An SMS version for tenants without WhatsApp
+- A real database instead of the Google Sheet, and hashed PINs
+- A weekly landlord summary: totals first, then only the exceptions
