@@ -52,7 +52,7 @@ export function buildMcpServer(kodi: Kodi): McpServer {
   server.registerTool(
     "balance",
     {
-      description: "The sender's rent for the current month: month, amount_kes (this month's rent), carried_kes (arrears), paid_kes, due_kes, open_plan. Tenants only.",
+      description: "The sender's rent for the current month: month, amount_kes (this month's rent), carried_kes (arrears), paid_kes, due_kes, due_date (YYYY-MM-DD), open_plan. Tenants only.",
       inputSchema: { ...identity },
       annotations: { readOnlyHint: true },
     },

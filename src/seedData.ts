@@ -26,7 +26,7 @@ export function seedRows(now: Date): Record<TabName, Row[]> {
       { phone: "254700000105", name: "Faith Chebet", role: "tenant", unit_id: "B2", language: "en", active: "yes", pin: "7352", pin_failures: "0" },
       { phone: "254700000199", name: "Former Tenant", role: "tenant", unit_id: "B3", language: "en", active: "no", pin: "0000", pin_failures: "0" },
       { phone: "254700000901", name: "Mr. Kamau", role: "landlord", unit_id: "", language: "en", active: "yes", pin: "9001", pin_failures: "0" },
-      { phone: "254700000902", name: "Joseph Njoroge", role: "caretaker", unit_id: "", language: "sw", active: "yes", pin: "9002", pin_failures: "0" },
+      { phone: "254700000902", name: "John Njoroge", role: "caretaker", unit_id: "", language: "sw", active: "yes", pin: "9002", pin_failures: "0" },
     ],
     charges: [
       { unit_id: "A1", month, rent_kes: "18000", carried_kes: "0", due_date: `${month}-05` },

@@ -44,7 +44,7 @@ describe("main flow", () => {
     const bal = await kodi.balance(AMINA);
     assert.equal(bal.ok, true);
     assert.deepEqual(bal, {
-      ok: true, unit_id: "A1", month: "2026-11", amount_kes: 18000, carried_kes: 0, paid_kes: 0, due_kes: 18000, open_plan: null,
+      ok: true, unit_id: "A1", month: "2026-11", amount_kes: 18000, carried_kes: 0, paid_kes: 0, due_kes: 18000, due_date: "2026-11-05", open_plan: null,
     });
 
     const pay = await kodi.pay(AMINA, 18000);

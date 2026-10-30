@@ -38,6 +38,7 @@ interface Ledger {
   carried_kes: number;
   paid_kes: number;
   due_kes: number;
+  due_date: string | null; // YYYY-MM-DD, from the charges tab
   open_plan: OpenPlan | null;
 }
 
@@ -533,6 +534,7 @@ export class Kodi {
       carried_kes,
       paid_kes,
       due_kes: Math.max(0, amount_kes + carried_kes - paid_kes),
+      due_date: charge?.due_date || null,
       open_plan: plan
         ? {
             plan_id: plan.id,
