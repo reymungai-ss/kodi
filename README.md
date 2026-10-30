@@ -153,12 +153,13 @@ and the four secret settings are already stored there, encrypted.
    ```bash
    vercel deploy --prod
    ```
-   When it finishes it prints the address, e.g. `https://kodi-xxxx.vercel.app`.
+   Kodi's public address is **`https://kodi-mcp.vercel.app`** (it moves to each
+   new production deploy automatically; `kodi-henna.vercel.app` also works).
    (Files listed in `.vercelignore`, including `.env`, are never uploaded.)
-3. Check it: open `https://<your-address>/health` in a browser. It should show
+3. Check it: open `https://kodi-mcp.vercel.app/health` in a browser. It should show
    `{"ok":true,"service":"kodi","demo":false}`. Then from your computer:
    ```bash
-   npm run smoke -- --url https://<your-address>/mcp
+   npm run smoke -- --url https://kodi-mcp.vercel.app/mcp
    ```
 
 **Changing a setting later:** Vercel dashboard → project **kodi** → Settings →
@@ -203,7 +204,7 @@ plan avoids that.)
 
 In Chord, add a **remote MCP server** with:
 
-- **URL:** `https://<your-domain>/mcp`
+- **URL:** `https://kodi-mcp.vercel.app/mcp`
 - **Authentication / header:** `Authorization: Bearer <your KODI_MCP_TOKEN>`
   (if Chord asks for a "bearer token", paste just the token)
 
