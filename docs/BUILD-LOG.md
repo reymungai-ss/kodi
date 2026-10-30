@@ -85,6 +85,7 @@ English or Swahili. The codes are `unknown_sender`, `not_your_unit`,
 | 13:04 | Speed fixes (measured) + tone rewrite | `1aee164` |
 | 13:22 | Agent shows figures without calling `balance`, copied from skill examples (issue 4.13) | |
 | ~13:30 | Skill examples replaced with placeholders | see git log |
+| 13:28 | Swahili chat switched to English after sign-in (issue 4.14) | |
 
 ---
 
@@ -333,7 +334,24 @@ Format for each: **what happened → how the cause was found → fix → what Ch
   "Why this reply", so builders can see when the agent answered without calling
   a tool.
 
-### 4.14 Demo date caveat
+### 4.14 The agent switched a Swahili conversation to English
+- **What happened:** the tenant opened with "Nataka kulipa". The agent asked
+  for house number and PIN in Swahili, then after sign-in said "Language on
+  file is English, so I'll continue in English."
+- **Found:** the skill said "Once signed in, reply in their `language`", the
+  saved preference from the tenants tab (Amina = `en`). The log confirmed
+  `whoami` and `balance` were both called (13:28:14), so the figures were real
+  this time and issue 4.13 was fixed.
+- **Fix (skill):**
+  - reply in the language the person writes in, and follow switches and mixes
+  - messages with no clear language (PINs, numbers) don't change it
+  - the saved language is only a fallback
+  - never announce the language or ask which they prefer
+  - translate a tool's `say` if the conversation is in the other language
+- **Lesson:** a stored preference is a default, not an override; in chat, what
+  the person does right now wins.
+
+### 4.15 Demo date caveat
 - Plans are only possible on or before the 20th, and the build day was the 30th,
   so a plan can't be shown succeeding live until the next month. Plans are
   covered by offline tests that use a mid-month clock. In the simulator, the
