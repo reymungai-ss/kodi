@@ -87,6 +87,7 @@ English or Swahili. The codes are `unknown_sender`, `not_your_unit`,
 | ~13:30 | Skill examples replaced with placeholders | see git log |
 | 13:28 | Swahili chat switched to English after sign-in (issue 4.14) | |
 | 13:31 | Agent disowns a real ticket; repeats "figures are correct" (issue 4.15) | |
+| 14:59 | Reply produced with no tool calls; agent declares everything fake (issue 4.16) | |
 
 ---
 
@@ -385,7 +386,41 @@ Format for each: **what happened → how the cause was found → fix → what Ch
 - **Suggestion for Chord:** include tool results (or a compact summary) in
   replayed history, or offer per-thread memory that tools can write to.
 
-### 4.16 Demo date caveat
+### 4.16 Chord ran a reply without the tools, and the agent declared everything fake *(field-note candidate, possibly Chord-side)*
+- **What happened:** after a successful flow (sign-in, balance with KES 6,500
+  already paid, part-payment link for KES 9,876), the tenant sent "PAID". The
+  agent replied: "I never ran the sign-in or the payment tools in this chat, so
+  the account details, the balance and the payment link I gave you were not
+  real… Your house number and PIN also didn't match our records on any attempt."
+- **Found:** every claim is contradicted by Kodi's records:
+  - `whoami` succeeded on every turn (14:56:51–14:58:44), and A1's
+    `pin_failures` is 0
+  - `pay` at 14:58:44 created `KDI-A1-202610-7` (KES 9,876), which is in the
+    Sheet as `pending`
+  - **For the "PAID" turn (14:59), Kodi received no request at all.** No tool
+    call, no `check`. In every earlier turn the agent called `whoami` first,
+    as instructed.
+
+  Chord's skill docs describe a "tool loop" and a "router fallback" that puts
+  the reference text inline. Our hypothesis is that this turn ran on the
+  fallback without tools, so the model saw no tool results anywhere and
+  reasoned that nothing had happened. To confirm, open **Why this reply** on
+  that message (look for `reference_delivery: inline` / no tools).
+- **Fix (skill):**
+  - if the tools can't be called, send a short holding message ("I can't reach
+    the rent records right this moment, please send that again") with
+    `1 Try again · 2 Talk to John`
+  - never conclude something didn't happen just because no tool result is
+    visible
+  - more banned phrases
+- **Reported to TSG Labs:** *(fill in when you contact them)*
+- **Suggestions for Chord:**
+  1. Never answer a turn of a tool-using teammate without its tools, or tell
+     the model explicitly that tools are temporarily unavailable.
+  2. Surface in the simulator when a reply used the fallback path.
+  3. Include tool results in replayed history (see 4.10 and 4.15).
+
+### 4.17 Demo date caveat
 - Plans are only possible on or before the 20th, and the build day was the 30th,
   so a plan can't be shown succeeding live until the next month. Plans are
   covered by offline tests that use a mid-month clock. In the simulator, the
@@ -440,7 +475,9 @@ Format for each: **what happened → how the cause was found → fix → what Ch
 6. **In-app test chat:** say it has no sender, or let builders set one.
 7. **Include tool results in replayed history**, or a per-thread memory tools
    can write to; without it agents doubt their own earlier replies.
-8. **Show tool calls per reply** in the simulator, so builders can see when an
+8. **Never run a tool-using teammate's reply without its tools** (or say so to
+   the model); one such reply told a tenant their real link was fake.
+9. **Show tool calls per reply** in the simulator, so builders can see when an
    answer wasn't backed by a tool call.
 
 ---
