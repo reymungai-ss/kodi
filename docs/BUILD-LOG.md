@@ -406,6 +406,15 @@ Format for each: **what happened → how the cause was found → fix → what Ch
   fallback without tools, so the model saw no tool results anywhere and
   reasoned that nothing had happened. To confirm, open **Why this reply** on
   that message (look for `reference_delivery: inline` / no tools).
+- **Couldn't confirm from Chord's side:**
+  - "Why this reply" couldn't be found. Per the docs it's admin-only, and the
+    simulator's conversations don't appear in the Chord app (the teammate page
+    shows "Customers · 0" after many simulator chats).
+  - The API route (`GET /v1/threads/{id}/turns`, which exposes
+    `metadata.tools_used`) needs a scoped API key, and the builder account
+    couldn't create one.
+  - So the only evidence available was Kodi's own request log, which is why
+    logging every MCP call (4.7) turned out to be essential.
 - **Fix (skill):**
   - if the tools can't be called, send a short holding message ("I can't reach
     the rent records right this moment, please send that again") with
@@ -419,6 +428,9 @@ Format for each: **what happened → how the cause was found → fix → what Ch
      the model explicitly that tools are temporarily unavailable.
   2. Surface in the simulator when a reply used the fallback path.
   3. Include tool results in replayed history (see 4.10 and 4.15).
+  4. Make simulator conversations visible in the app (with "Why this reply") to
+     the teammate's owner, or let builders create a read-only API key, so they
+     can debug a reply without asking the platform team.
 
 ### 4.17 Demo date caveat
 - Plans are only possible on or before the 20th, and the build day was the 30th,
@@ -477,7 +489,9 @@ Format for each: **what happened → how the cause was found → fix → what Ch
    can write to; without it agents doubt their own earlier replies.
 8. **Never run a tool-using teammate's reply without its tools** (or say so to
    the model); one such reply told a tenant their real link was fake.
-9. **Show tool calls per reply** in the simulator, so builders can see when an
+9. **Let builders inspect simulator replies:** simulator chats don't appear in
+   the app, and builder accounts can't create an API key to read them.
+10. **Show tool calls per reply** in the simulator, so builders can see when an
    answer wasn't backed by a tool call.
 
 ---
