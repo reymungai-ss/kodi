@@ -119,6 +119,21 @@ describe("main flow", () => {
     assert.equal([a.already_recorded, b.already_recorded].filter(Boolean).length, 1);
   });
 
+  test("after a Sheet reset, references Paystack already knows are skipped", async () => {
+    // Paystack still remembers -1 and -2 from before the reset; the ledger doesn't.
+    await paystack.initialize({ amountKes: 1, reference: "KDI-A1-202611-1", email: "x@y.z", metadata: {} });
+    await paystack.initialize({ amountKes: 1, reference: "KDI-A1-202611-2", email: "x@y.z", metadata: {} });
+    const pay = await kodi.pay(AMINA, 7000);
+    assert.ok(pay.ok);
+    assert.equal(pay.reference, "KDI-A1-202611-3");
+    const rows = store.tabs.payments.filter((p) => p.unit_id === "A1");
+    assert.deepEqual(rows.map((r) => [r.reference, r.status]), [
+      ["KDI-A1-202611-1", "failed"],
+      ["KDI-A1-202611-2", "failed"],
+      ["KDI-A1-202611-3", "pending"],
+    ]);
+  });
+
   test("a paid-but-unchecked link is recorded, not reused", async () => {
     const first = await kodi.pay(AMINA, 9000);
     assert.ok(first.ok);

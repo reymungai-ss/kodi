@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { fail, type Failure, type Lang } from "./errors.js";
-import type { Payments, Verified } from "./paystack.js";
+import { PaystackError, type Payments, type Verified } from "./paystack.js";
 import type { Row } from "./schema.js";
 import type { Store } from "./store.js";
 
@@ -223,10 +223,14 @@ export class Kodi {
     const yyyymm = month.replace("-", "");
     let n = existing.filter((p) => p.unit_id === unit && p.month === month).length + 1;
 
-    // 1. Reserve the reference in the ledger first, so every Paystack link has a row.
+    // Paystack remembers every reference forever, including ones from before a
+    // Sheet reset, so a reference that's free in the ledger can still be taken
+    // at Paystack. On "Duplicate Transaction Reference" we move to the next n.
     let reference = "";
-    try {
-      for (let tries = 0; tries < 5; tries++, n++) {
+    let payment_url = "";
+    for (let attempt = 0; attempt < 8 && !payment_url; attempt++, n++) {
+      // 1. Reserve the reference in the ledger first, so every Paystack link has a row.
+      try {
         reference = `KDI-${unit}-${yyyymm}-${n}`;
         const res = await this.store.append("payments", [
           {
@@ -239,30 +243,29 @@ export class Kodi {
             created_at: this.now().toISOString(),
           },
         ], "reference");
-        if (res === "ok") break;
-        reference = "";
+        if (res === "duplicate") continue; // taken in the ledger; try the next n
+      } catch (err) {
+        this.log("could not reserve reference", String(err));
+        return fail("ledger_write_failed", lang);
       }
-    } catch (err) {
-      this.log("could not reserve reference", String(err));
-      return fail("ledger_write_failed", lang);
-    }
-    if (!reference) return fail("ledger_write_failed", lang);
 
-    // 2. Ask Paystack for the link.
-    let payment_url: string;
-    try {
-      const init = await this.payments.initialize({
-        amountKes: amount_kes,
-        reference,
-        email: `${unit.toLowerCase()}@${this.emailDomain}`,
-        metadata: { building: "Baraka Court", unit_id: unit, month, kind: isPlan ? "plan_first" : "rent" },
-      });
-      payment_url = init.authorization_url;
-    } catch (err) {
-      this.log(`paystack initialize failed for ${reference}`, String(err));
-      await this.store.update("payments", { reference }, { status: "failed" }).catch(() => 0);
-      return fail("paystack_unavailable", lang);
+      // 2. Ask Paystack for the link.
+      try {
+        const init = await this.payments.initialize({
+          amountKes: amount_kes,
+          reference,
+          email: `${unit.toLowerCase()}@${this.emailDomain}`,
+          metadata: { building: "Baraka Court", unit_id: unit, month, kind: isPlan ? "plan_first" : "rent" },
+        });
+        payment_url = init.authorization_url;
+      } catch (err) {
+        const duplicate = err instanceof PaystackError && /duplicate/i.test(err.message);
+        this.log(`paystack initialize failed for ${reference}${duplicate ? " (reference taken at Paystack, trying next)" : ""}`, String(err));
+        await this.store.update("payments", { reference }, { status: "failed" }).catch(() => 0);
+        if (!duplicate) return fail("paystack_unavailable", lang);
+      }
     }
+    if (!payment_url) return fail("paystack_unavailable", lang);
 
     // 3. Save the link so it can be reused. If this write fails the link still works.
     await this.store.update("payments", { reference }, { payment_url }).catch((err) =>
