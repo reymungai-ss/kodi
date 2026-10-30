@@ -88,6 +88,7 @@ English or Swahili. The codes are `unknown_sender`, `not_your_unit`,
 | 13:28 | Swahili chat switched to English after sign-in (issue 4.14) | |
 | 13:31 | Agent disowns a real ticket; repeats "figures are correct" (issue 4.15) | |
 | 14:59 | Reply produced with no tool calls; agent declares everything fake (issue 4.16) | |
+| ~15:30 | Chord API: "PAID" reply had `tools_used` none, ran on the tool loop (not fallback); every reply is a fresh run | |
 
 ---
 
@@ -198,6 +199,10 @@ Format for each: **what happened → how the cause was found → fix → what Ch
   - this also settles the "three tenants called John" question: identity is
     unit + secret, never name
   - 9 new tests
+- **Later confirmed via Chord's API:** the simulator gives each new chat a
+  different `channel_participant_id` (`partner_…`), so even a passed-through
+  sender ID wouldn't identify a returning tenant. Only a credential the person
+  holds (the PIN) works.
 - **Trade-off:** PINs appear in Chord's stored chat history. That's acceptable
   for test data and is flagged in the go-live note.
 - **Suggestions for Chord:**
@@ -386,51 +391,56 @@ Format for each: **what happened → how the cause was found → fix → what Ch
 - **Suggestion for Chord:** include tool results (or a compact summary) in
   replayed history, or offer per-thread memory that tools can write to.
 
-### 4.16 Chord ran a reply without the tools, and the agent declared everything fake *(field-note candidate, possibly Chord-side)*
+### 4.16 A reply ran with no tool calls, and the agent declared everything fake *(field-note candidate)*
 - **What happened:** after a successful flow (sign-in, balance with KES 6,500
-  already paid, part-payment link for KES 9,876), the tenant sent "PAID". The
+  already paid, a part-payment link for KES 9,876), the tenant sent "PAID". The
   agent replied: "I never ran the sign-in or the payment tools in this chat, so
   the account details, the balance and the payment link I gave you were not
   real… Your house number and PIN also didn't match our records on any attempt."
-- **Found:** every claim is contradicted by Kodi's records:
-  - `whoami` succeeded on every turn (14:56:51–14:58:44), and A1's
-    `pin_failures` is 0
-  - `pay` at 14:58:44 created `KDI-A1-202610-7` (KES 9,876), which is in the
-    Sheet as `pending`
-  - **For the "PAID" turn (14:59), Kodi received no request at all.** No tool
-    call, no `check`. In every earlier turn the agent called `whoami` first,
-    as instructed.
-
-  Chord's skill docs describe a "tool loop" and a "router fallback" that puts
-  the reference text inline. Our hypothesis is that this turn ran on the
-  fallback without tools, so the model saw no tool results anywhere and
-  reasoned that nothing had happened. To confirm, open **Why this reply** on
-  that message (look for `reference_delivery: inline` / no tools).
-- **Couldn't confirm from Chord's side:**
-  - "Why this reply" couldn't be found. Per the docs it's admin-only, and the
-    simulator's conversations don't appear in the Chord app (the teammate page
-    shows "Customers · 0" after many simulator chats).
-  - The API route (`GET /v1/threads/{id}/turns`, which exposes
-    `metadata.tools_used`) needs a scoped API key, and the builder account
-    couldn't create one.
-  - So the only evidence available was Kodi's own request log, which is why
-    logging every MCP call (4.7) turned out to be essential.
-- **Fix (skill):**
-  - if the tools can't be called, send a short holding message ("I can't reach
-    the rent records right this moment, please send that again") with
+- **Found: Kodi's side.** Kodi's request log shows `pay` at 14:58:44 created
+  `KDI-A1-202610-7` (in the Sheet as `pending`), and **no request at all** for
+  the "PAID" turn.
+- **Found: Chord's side.** With a Chord API key (after first being unable to
+  create one, then getting one), the following showed up:
+  - **Turns** (`GET /v1/threads/{id}/turns`): every reply records
+    `metadata.tools_used`. The "PAID" reply (14:59:36) has **none**. Earlier
+    replies show `mcp__kodi__whoami`, `mcp__kodi__balance` and `mcp__kodi__pay`,
+    all `ok: true`.
+  - **The two failed attempts:** the tenant first sent two wrong PINs (`A1, 9821`
+    and `A1, 9841`), then the right one. Those two "don't match" replies were in
+    the history. That's where "didn't match on any attempt" came from.
+  - **The reply inspector**
+    (`GET /v1/teammates/{id}/skills/executions/{execution_id}`): the "PAID"
+    reply ran exactly like the working ones. It used `reference_delivery:
+    on_demand` (the tool loop, **not** the router fallback) and the same skill
+    (revision v8). **The tools were available; the model chose not to call
+    them.** My earlier guess that it was the router fallback was wrong.
+  - **Every reply is a fresh agent run:** all seven replies in the chat have a
+    different `conversation_id`. The model gets the chat *text* each time, but
+    not earlier tool results. That's the mechanism behind 4.10, 4.15 and this
+    issue.
+  - **Skill v8** had the `whoami`-context fix from 4.15 but **not yet** the
+    holding-reply rule below, which hadn't been published.
+- **Fix (skill; published after v8):**
+  - if the tools can't be called, send a short holding message with
     `1 Try again · 2 Talk to John`
-  - never conclude something didn't happen just because no tool result is
-    visible
-  - more banned phrases
-- **Reported to TSG Labs:** *(fill in when you contact them)*
+  - not seeing a tool result is never evidence that something didn't happen;
+    only a tool result can say so
+  - more banned phrases ("I never ran the tools", "don't use that link")
+- **Lessons:**
+  - In a platform that restarts the agent on every message, the model will
+    sometimes re-judge the whole history from text alone. Every important fact
+    needs to be re-fetchable by a tool it calls each turn (4.15), and the
+    instructions must say plainly that missing evidence isn't negative evidence.
+  - Check the platform's own records before blaming the platform: the router
+    fallback guess was wrong.
 - **Suggestions for Chord:**
-  1. Never answer a turn of a tool-using teammate without its tools, or tell
-     the model explicitly that tools are temporarily unavailable.
-  2. Surface in the simulator when a reply used the fallback path.
-  3. Include tool results in replayed history (see 4.10 and 4.15).
-  4. Make simulator conversations visible in the app (with "Why this reply") to
-     the teammate's owner, or let builders create a read-only API key, so they
-     can debug a reply without asking the platform team.
+  1. Include tool calls and results (or a compact summary) in the history
+     given to each new run.
+  2. Make simulator conversations visible in the app with "Why this reply" for
+     the teammate's owner. The API had the answers, but the app didn't show
+     those chats.
+  3. A per-thread memory that tools can write facts into.
 
 ### 4.17 Demo date caveat
 - Plans are only possible on or before the 20th, and the build day was the 30th,
@@ -487,10 +497,11 @@ Format for each: **what happened → how the cause was found → fix → what Ch
 6. **In-app test chat:** say it has no sender, or let builders set one.
 7. **Include tool results in replayed history**, or a per-thread memory tools
    can write to; without it agents doubt their own earlier replies.
-8. **Never run a tool-using teammate's reply without its tools** (or say so to
-   the model); one such reply told a tenant their real link was fake.
-9. **Let builders inspect simulator replies:** simulator chats don't appear in
-   the app, and builder accounts can't create an API key to read them.
+8. **Give each new run the earlier tool results:** every reply is a fresh
+   run (a new `conversation_id`), and one that skipped tools told a tenant their
+   real link was fake.
+9. **Let builders inspect simulator replies in the app:** the API shows
+   `tools_used` and the inspector, but the app doesn't list simulator chats.
 10. **Show tool calls per reply** in the simulator, so builders can see when an
    answer wasn't backed by a tool call.
 
