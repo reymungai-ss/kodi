@@ -135,6 +135,19 @@ describe("main flow", () => {
     assert.deepEqual(rows.map((r) => [r.reference, r.status]), [["KDI-A1-202611-3", "pending"]]);
   });
 
+  test("after many resets, the first free reference is found with few Paystack checks", async () => {
+    for (let k = 1; k <= 20; k++) {
+      await paystack.initialize({ amountKes: 1, reference: `KDI-A1-202611-${k}`, email: "x@y.z", metadata: {} });
+    }
+    let verifies = 0;
+    const realVerify = paystack.verify.bind(paystack);
+    paystack.verify = (ref: string) => (verifies++, realVerify(ref));
+    const pay = await kodi.pay(AMINA, 1000);
+    assert.ok(pay.ok);
+    assert.equal(pay.reference, "KDI-A1-202611-21");
+    assert.ok(verifies <= 12, `used ${verifies} verify calls`);
+  });
+
   test("with the per-request Sheet cache, writes are seen within the call and by the next call", async () => {
     let reads = 0;
     const counting = Object.assign(Object.create(store), { read: (t: TabName) => (reads++, store.read(t)) });

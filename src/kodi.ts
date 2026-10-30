@@ -286,6 +286,7 @@ export class Kodi {
     // Paystack remembers every reference forever, including ones from before a
     // Sheet reset, so a reference that's free in the ledger can still be taken
     // at Paystack. On "Duplicate Transaction Reference" we move to the next n.
+    n = await this.firstFreeAtPaystack(unit, yyyymm, n);
     let reference = "";
     let payment_url = "";
     for (let attempt = 0; attempt < 8 && !payment_url; attempt++, n++) {
@@ -330,7 +331,10 @@ export class Kodi {
         if (!duplicate) return fail("paystack_unavailable", lang);
       }
     }
-    if (!payment_url) return fail("paystack_unavailable", lang);
+    if (!payment_url) {
+      this.log(`gave up creating a link for ${unit} ${month} after 8 attempts (last tried ${reference})`);
+      return fail("paystack_unavailable", lang);
+    }
 
     // 3. Save the link so it can be reused, after the reply goes out. If this
     //    write fails the link still works; it just won't be reused.
@@ -340,6 +344,44 @@ export class Kodi {
       ),
     );
     return { reference, payment_url };
+  }
+
+  /**
+   * References are used in order, so the ones Paystack already holds form a
+   * run from `start` upwards (e.g. after a Sheet reset). Find the first free
+   * number by jumping ahead (1, 2, 4, 8…) and then narrowing down: a handful
+   * of fast verify calls however long the run is. If Paystack can't be
+   * reached, start from `start` and let the duplicate fallback handle it.
+   */
+  private async firstFreeAtPaystack(unit: string, yyyymm: string, start: number): Promise<number> {
+    const taken = async (k: number) => {
+      try {
+        return (await this.payments.verify(`KDI-${unit}-${yyyymm}-${k}`)) !== null;
+      } catch {
+        return null; // unknown
+      }
+    };
+    const first = await taken(start);
+    if (first !== true) return start;
+    let lo = start; // known taken
+    let step = 1;
+    let hi = start + step;
+    for (let i = 0; i < 20; i++) {
+      const t = await taken(hi);
+      if (t === null) return hi; // can't tell; try here
+      if (!t) break;
+      lo = hi;
+      step *= 2;
+      hi = start + step;
+    }
+    // Now lo is taken and hi is free: narrow down to the first free number.
+    while (hi - lo > 1) {
+      const mid = Math.floor((lo + hi) / 2);
+      const t = await taken(mid);
+      if (t === false) hi = mid;
+      else lo = mid;
+    }
+    return hi;
   }
 
   // ---- check ---------------------------------------------------------------
