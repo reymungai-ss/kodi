@@ -45,6 +45,10 @@ describe("main flow", () => {
     assert.equal(bal.ok, true);
     assert.deepEqual(bal, {
       ok: true, unit_id: "A1", month: "2026-11", amount_kes: 18000, carried_kes: 0, paid_kes: 0, due_kes: 18000, due_date: "2026-11-05", open_plan: null,
+      plan: {
+        available: true, min_first_kes: 9000, suggested_first_kes: 9000, suggested_second_kes: 9000,
+        earliest_second_date: "2026-11-10", latest_second_date: "2026-11-20",
+      },
     });
 
     const pay = await kodi.pay(AMINA, 18000);
@@ -182,6 +186,24 @@ describe("main flow", () => {
     assert.ok(done.ok);
     assert.equal(done.due_kes_after, 0);
     assert.equal(store.tabs.plans_escalations.find((p) => p.id === "PLN-B2-202611-1")?.status, "done");
+  });
+
+  test("balance says when a plan is not possible, and why", async () => {
+    // Odd amounts round the first payment up: B1 owes 12,000; A2 owes 22,000.
+    const b = await kodi.balance(BRIAN);
+    assert.ok(b.ok && b.plan.available);
+    assert.equal(b.plan.suggested_first_kes + b.plan.suggested_second_kes, b.due_kes);
+    now = new Date("2026-11-21T06:00:00Z"); // after the 20th
+    const late = await kodi.balance(AMINA);
+    assert.ok(late.ok);
+    assert.deepEqual(late.plan, { available: false, reason: "past_20th", latest_second_date: "2026-11-20" });
+    now = new Date("2026-11-10T06:00:00Z");
+    const paid = await kodi.balance(GRACE);
+    assert.ok(paid.ok && !paid.plan.available && paid.plan.reason === "nothing_due");
+    const p = await kodi.pay(FAITH, 12500, { second_amount_kes: 12500, second_date: "2026-11-18" });
+    assert.ok(p.ok);
+    const withPlan = await kodi.balance(FAITH);
+    assert.ok(withPlan.ok && !withPlan.plan.available && withPlan.plan.reason === "open_plan");
   });
 
   test("report for landlord and caretaker", async () => {

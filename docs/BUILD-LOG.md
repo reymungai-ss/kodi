@@ -89,6 +89,7 @@ English or Swahili. The codes are `unknown_sender`, `not_your_unit`,
 | 13:31 | Agent disowns a real ticket; repeats "figures are correct" (issue 4.15) | |
 | 14:59 | Reply produced with no tool calls; agent declares everything fake (issue 4.16) | |
 | ~15:30 | Chord API: "PAID" reply had `tools_used` none, ran on the tool loop (not fallback); every reply is a fresh run | |
+| 15:19 | v10 chat: tools on every reply, but a plan offered on the 30th, a meta comment, backticks (issue 4.17) | |
 
 ---
 
@@ -442,7 +443,36 @@ Format for each: **what happened → how the cause was found → fix → what Ch
      those chats.
   3. A per-thread memory that tools can write facts into.
 
-### 4.17 Demo date caveat
+### 4.17 v10 mostly worked, but still slipped on dates, a meta comment and formatting
+- **What happened:** with v10 (Chord's API confirmed v10 was live and identical
+  to the repo), every reply called its tools, and "Paid" correctly ran `check`
+  (KES 2,400 received, KES 9,100 left). Three flaws remained in one chat:
+  1. "The figures I gave were right." The banned phrase came back.
+  2. "It's 30 October, so you can split it… KES 5,750 now and KES 5,750…": a
+     plan offered after the 20th. The server would have refused it.
+  3. Every options line was wrapped in backticks, which WhatsApp shows as
+     code formatting.
+- **Found:** Chord's turns API (`tools_used` per reply) plus the reply
+  inspector (skill revision per reply), compared against the repo file.
+- **Fixes:**
+  - **Server:** `balance` now returns `plan`, saying whether a plan is
+    possible right now, why not (`past_20th`, `open_plan`, `nothing_due`), and
+    the exact amounts and dates to offer. The model no longer does any date or
+    rounding maths. One new test.
+  - **Skill:**
+    - plans come only from `balance.plan`
+    - the quoted list of banned phrases is replaced by a direct instruction
+      ("start every reply with the new answer; never comment on your earlier
+      messages"), and the quoted bad example is removed, because quoting the
+      phrases seemed to plant them
+    - options are plain text, with no backticks in any example
+- **Lessons:**
+  - Move every rule that can be computed (dates, thresholds, rounding) into
+    the tool, and let the model only phrase it.
+  - Quoting a forbidden phrase in a prompt can make the model more likely to
+    say it.
+
+### 4.18 Demo date caveat
 - Plans are only possible on or before the 20th, and the build day was the 30th,
   so a plan can't be shown succeeding live until the next month. Plans are
   covered by offline tests that use a mid-month clock. In the simulator, the
@@ -452,7 +482,7 @@ Format for each: **what happened → how the cause was found → fix → what Ch
 
 ## 5. Evidence that it works
 
-- **Offline:** 29/29 tests (`npm test`). They cover the main flow, every error
+- **Offline:** 31/31 tests (`npm test`). They cover the main flow, every error
   code, Paystack outages, Sheet write failures, races, plans, PIN rules, the
   cache and the reset scenario.
 - **Live smoke test** against `kodi-mcp.vercel.app` and the real Sheet and

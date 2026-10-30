@@ -127,7 +127,34 @@ export class Kodi {
     if ("ok" in me) return me;
     if (me.role !== "tenant") return fail("not_allowed", me.language, "balance");
     const ledger = await this.ledger(me.unit_id);
-    return { ok: true as const, unit_id: me.unit_id, ...ledger };
+    return { ok: true as const, unit_id: me.unit_id, ...ledger, plan: this.planOffer(ledger) };
+  }
+
+  /**
+   * Whether a part-payment plan is possible right now, and the exact amounts
+   * to offer. The agent repeats this instead of doing date or rounding maths
+   * itself (it once offered a plan on the 30th). `pay` enforces the same rules.
+   */
+  private planOffer(ledger: Ledger) {
+    const today = nairobiDate(this.now());
+    const lastDay = `${ledger.month}-${String(PLAN_LAST_DAY).padStart(2, "0")}`;
+    const unavailable = (reason: "nothing_due" | "open_plan" | "past_20th") => ({
+      available: false as const,
+      reason,
+      latest_second_date: lastDay,
+    });
+    if (ledger.due_kes < 2) return unavailable("nothing_due");
+    if (ledger.open_plan) return unavailable("open_plan");
+    if (today > lastDay) return unavailable("past_20th");
+    const first = Math.ceil(ledger.due_kes / 2);
+    return {
+      available: true as const,
+      min_first_kes: first,
+      suggested_first_kes: first,
+      suggested_second_kes: ledger.due_kes - first,
+      earliest_second_date: today,
+      latest_second_date: lastDay,
+    };
   }
 
   // ---- pay -----------------------------------------------------------------
