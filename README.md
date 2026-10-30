@@ -3,8 +3,10 @@
 Kodi is a Chord teammate that collects rent for a small residential building
 over WhatsApp. A tenant signs in with their house number and PIN, asks what they
 owe, gets a Paystack link (M-Pesa or card), pays, and Kodi confirms and records
-it in the building's Google Sheet. The landlord and caretaker can ask who hasn't
-paid. Anything Kodi can't handle becomes a ticket for a person.
+it in the building's Google Sheet, exactly once. The landlord and caretaker can
+ask who hasn't paid. Anything Kodi can't handle becomes a ticket for a person.
+
+Built for the TSG Labs build exercise. **Role: Product Management.**
 
 ```
  WhatsApp (simulator) ──► Chord teammate ──MCP──► Kodi server (Vercel)
@@ -17,10 +19,12 @@ paid. Anything Kodi can't handle becomes a ticket for a person.
 - **Skill (the business logic the agent follows):** [skills/kodi-rent/SKILL.md](skills/kodi-rent/SKILL.md), plus [references/building.md](skills/kodi-rent/references/building.md)
 - **Custom tool:** an MCP server at `https://kodi-mcp.vercel.app/mcp` (Streamable HTTP, bearer token)
 - **Go-live note for the owner:** [GO-LIVE.md](GO-LIVE.md)
+- **What broke, and how it was fixed:** [docs/BUILD-LOG.md](docs/BUILD-LOG.md) (exact errors and evidence) and [docs/PROJECT-SUMMARY.md](docs/PROJECT-SUMMARY.md)
 
 ## Try it in the simulator
 
-All data is made up, and Paystack runs in test mode.
+The agent is live on my Chord account. All data is made up, and Paystack runs
+in test mode.
 
 | Sign in as | Send | Situation |
 |---|---|---|
@@ -36,20 +40,33 @@ A typical run: "How much do I owe?" → `A1, 4821` → "I'll pay 1000" → pay t
 with Paystack's test card `4084 0840 8408 4081` (any future expiry, CVV `408`) →
 "I've paid" → Kodi confirms and shows the new balance.
 
+Things worth trying: write in Swahili and Kodi follows; enter a wrong PIN; ask
+about another tenant's flat; say "I don't have it all". Two-part plans are only
+allowed up to the 20th of the month, so after the 20th Kodi explains the rule
+and offers a part payment instead. Plans themselves are covered by the offline
+tests, which use a mid-month clock.
+
 ## The tools
 
-Every tool identifies the person by `account` + `pin` (house number, or
-`landlord`/`caretaker`), or by `from` (a WhatsApp number) on channels that
-provide one.
+**Why house number + PIN:** Chord passes no sender identity to MCP tools (no
+phone number, no sender ID), and the simulator gives every chat a new
+participant ID. So the person proves who they are with something they hold.
+Every tool accepts `account` + `pin` (house number, or `landlord`/`caretaker`),
+or `from` (a WhatsApp number) on channels that provide one.
 
 | Tool | Who | Returns |
 |---|---|---|
-| `whoami` | anyone | role, unit, name, language |
-| `balance` | tenants | month, rent, arrears, paid, due, open plan |
+| `whoami` | anyone | role, unit, name, language, plus the **latest payment link** and **open tickets** |
+| `balance` | tenants | month, rent, arrears, paid, due, due date, open plan, and **whether a plan is possible right now, with the exact amounts** |
 | `pay` | tenants | Paystack `payment_url` + `reference`; optional plan (≥50% now, rest by the 20th) |
 | `check` | tenants (own unit), staff | Paystack status; records the payment if it succeeded |
-| `report` | landlord, caretaker | paid count and who owes what |
-| `escalate` | anyone signed in | `ticket_id` |
+| `report` | landlord, caretaker | paid count, total collected, and who owes what |
+| `escalate` | anyone signed in | `ticket_id` (no duplicate if one is already open) |
+
+`whoami` returns the latest link and tickets because every Chord reply is a
+fresh agent run that sees the chat text but not earlier tool results. Without
+them, the agent sometimes doubted its own earlier, correct answers (see
+BUILD-LOG 4.10, 4.15, 4.16).
 
 Every failure returns `{ ok: false, code, say }`, where `say` is a polite
 sentence in the person's language (English or Swahili). The codes are
@@ -66,10 +83,14 @@ sentence in the person's language (English or Swahili). The codes are
   reused, after first asking Paystack whether it was quietly paid.
 - **Every link is logged.** The reference is written to the ledger *before*
   Paystack is called, so there's never a link without a ledger row.
+- **Unique references, even after a reset.** References follow
+  `KDI-<unit>-<yyyymm>-<n>`, and numbers Paystack already holds are skipped.
+- **Rules live in the server, not the model.** Plan dates and amounts are
+  computed by `balance`; the agent only phrases them.
 - **No refunds or transfers.** That code doesn't exist; Kodi refuses live
   Paystack keys.
 - **PIN protection.** Five wrong PINs lock the account. A wrong PIN, an unknown
-  house and an ex-tenant all get the same answer.
+  house and an ex-tenant all get the same answer. PINs are never logged.
 
 ## Run it yourself
 
@@ -87,7 +108,7 @@ Needs Node.js 20+, a Google Sheet, and a Paystack test secret key.
    ```bash
    npm install
    npm run seed     # creates the 5 tabs with sample data (asks for "yes"; wipes them)
-   npm test         # 27 offline tests: every rule and error code, no network
+   npm test         # 31 offline tests: every rule and error code, no network
    npm run dev      # Kodi on http://localhost:3000/mcp
    npm run smoke    # in a second terminal: live MCP test against the server
    npm run reset    # clears test payments, plans and tickets
@@ -123,11 +144,22 @@ Needs Node.js 20+, a Google Sheet, and a Paystack test secret key.
 | `src/mcp.ts` | The six MCP tools and their schemas |
 | `src/index.ts` | HTTP server: `/mcp` (bearer-protected, stateless), `/health`, request logging (never logs PINs) |
 | `src/paystack.ts` | Paystack initialize + verify only; plus a fake for tests |
-| `src/store.ts` | Sheet access via the Apps Script web app; plus an in-memory store for tests |
+| `src/store.ts` | Sheet access via the Apps Script web app, with a per-request cache; plus an in-memory store for tests |
 | `src/schema.ts`, `src/seedData.ts` | Sheet tabs/columns and sample data |
 | `apps-script/Code.gs` | Runs inside the Sheet: read / append / update / replace, secret-protected, locked writes |
-| `test/flow.test.ts` | Offline tests: main flow, all error codes, outages, PIN rules |
+| `test/flow.test.ts` | Offline tests: main flow, all error codes, outages, races, plans, PIN rules |
 | `scripts/` | `seed`, `reset`, and `smoke` (a live MCP client) |
+| `docs/` | Build log and project summary |
+
+## Known limits
+
+- **No alerts yet.** Tickets and lockouts only appear in the Sheet.
+- **No Paystack webhook.** A payment is recorded when someone asks Kodi to check.
+- **PINs are stored as plain text** in the Sheet, and are visible in Chord's chat
+  history.
+- **The Google Sheet is slow** (about 3.5 s per call). Fine for one building; use
+  a database for real use.
+- **Monthly charges are entered by hand** in the Sheet.
 
 ## How I used AI tools
 
