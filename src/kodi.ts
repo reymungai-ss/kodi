@@ -1,0 +1,544 @@
+import { randomBytes } from "node:crypto";
+import { fail, type Failure, type Lang } from "./errors.js";
+import type { Payments, Verified } from "./paystack.js";
+import type { Row } from "./schema.js";
+import type { Store } from "./store.js";
+
+// The rent rules for Baraka Court. Each public method is one MCP tool.
+// Nothing here knows about MCP or HTTP, so it can be tested on its own.
+
+export type Role = "tenant" | "landlord" | "caretaker";
+
+export interface Person {
+  phone: string;
+  name: string;
+  role: Role;
+  unit_id: string;
+  language: Lang;
+}
+
+export interface Plan {
+  second_amount_kes: number;
+  second_date: string; // YYYY-MM-DD
+}
+
+export interface OpenPlan {
+  plan_id: string;
+  first_amount_kes: number;
+  second_amount_kes: number;
+  second_date: string;
+}
+
+interface Ledger {
+  month: string; // YYYY-MM
+  amount_kes: number;
+  carried_kes: number;
+  paid_kes: number;
+  due_kes: number;
+  open_plan: OpenPlan | null;
+}
+
+export interface KodiOptions {
+  store: Store;
+  payments: Payments;
+  now?: () => Date;
+  log?: (msg: string, extra?: unknown) => void;
+  emailDomain?: string;
+}
+
+const PLAN_LAST_DAY = 20;
+// Paystack needs an email per payment. ".test" is rejected by Paystack's
+// validator, so the default uses example.com, which is reserved and never
+// delivers mail. Override with TENANT_EMAIL_DOMAIN.
+const DEFAULT_EMAIL_DOMAIN = "tenants.baraka-court.example.com";
+
+export class Kodi {
+  private store: Store;
+  private payments: Payments;
+  private now: () => Date;
+  private log: (msg: string, extra?: unknown) => void;
+  private emailDomain: string;
+
+  constructor(opts: KodiOptions) {
+    this.store = opts.store;
+    this.payments = opts.payments;
+    this.now = opts.now ?? (() => new Date());
+    this.log = opts.log ?? ((msg, extra) => console.error(`[kodi] ${msg}`, extra ?? ""));
+    this.emailDomain = opts.emailDomain || DEFAULT_EMAIL_DOMAIN;
+  }
+
+  // ---- whoami --------------------------------------------------------------
+
+  async whoami(from: string) {
+    const me = await this.identify(from);
+    if (!me) return { ok: true as const, role: "unknown" as const };
+    return {
+      ok: true as const,
+      role: me.role,
+      unit_id: me.unit_id || null,
+      name: me.name,
+      language: me.language,
+    };
+  }
+
+  // ---- balance -------------------------------------------------------------
+
+  async balance(from: string) {
+    const me = await this.identify(from);
+    if (!me) return fail("unknown_sender");
+    if (me.role !== "tenant") return fail("not_allowed", me.language, "balance");
+    const ledger = await this.ledger(me.unit_id);
+    return { ok: true as const, unit_id: me.unit_id, ...ledger };
+  }
+
+  // ---- pay -----------------------------------------------------------------
+
+  async pay(from: string, amount_kes: number, plan?: Plan) {
+    const me = await this.identify(from);
+    if (!me) return fail("unknown_sender");
+    if (me.role !== "tenant") return fail("not_allowed", me.language, "pay");
+    const lang = me.language;
+    const unit = me.unit_id;
+
+    let ledger = await this.ledger(unit);
+    if (!Number.isInteger(amount_kes) || amount_kes < 1) {
+      return fail("amount_invalid", lang, undefined, { due: ledger.due_kes });
+    }
+
+    // Is there already an unpaid link for this unit and amount? Ask Paystack
+    // about it first: if it was quietly paid, record it rather than reuse it.
+    let reusable: Row | undefined;
+    const payments = await this.store.read("payments");
+    const candidates = payments.filter(
+      (p) =>
+        p.unit_id === unit &&
+        p.month === ledger.month &&
+        p.status === "pending" &&
+        p.payment_url &&
+        toInt(p.amount_kes) === amount_kes,
+    );
+    for (const p of candidates) {
+      let v: Verified | null = null;
+      try {
+        v = await this.payments.verify(p.reference);
+      } catch (err) {
+        this.log(`verify before reuse failed for ${p.reference}`, String(err));
+        reusable ??= p; // can't tell; reusing is safe, Paystack won't charge a reference twice
+        continue;
+      }
+      if (v && v.status === "success" && v.reference === p.reference) {
+        const rec = await this.recordSuccess(p, v);
+        if (rec === "failed") return fail("ledger_write_failed", lang, "after_payment");
+        ledger = await this.ledger(unit);
+      } else if (v && ["failed", "reversed"].includes(v.status)) {
+        await this.store.update("payments", { reference: p.reference }, { status: v.status }, { status: "success" }).catch(() => 0);
+      } else {
+        reusable ??= p;
+      }
+    }
+
+    if (ledger.due_kes <= 0) return fail("amount_invalid", lang, "nothing_due");
+    if (amount_kes > ledger.due_kes) return fail("amount_invalid", lang, undefined, { due: ledger.due_kes });
+
+    if (plan) {
+      const bad = this.checkPlan(ledger, amount_kes, plan, lang);
+      if (bad) return bad;
+    }
+
+    let reference: string;
+    let payment_url: string;
+    let reused = false;
+
+    if (reusable) {
+      reference = reusable.reference;
+      payment_url = reusable.payment_url;
+      reused = true;
+    } else {
+      const created = await this.createLink(me, ledger.month, amount_kes, payments, Boolean(plan));
+      if ("ok" in created) return created;
+      ({ reference, payment_url } = created);
+    }
+
+    let plan_id: string | null = null;
+    if (plan) {
+      plan_id = `PLN-${reference.slice(4)}`;
+      try {
+        await this.store.append("plans_escalations", [
+          {
+            id: plan_id,
+            kind: "plan",
+            unit_id: unit,
+            from: me.phone,
+            month: ledger.month,
+            status: "open",
+            first_amount_kes: String(amount_kes),
+            second_amount_kes: String(plan.second_amount_kes),
+            second_date: plan.second_date,
+            created_at: this.now().toISOString(),
+          },
+        ], "id");
+        await this.store.update("payments", { reference }, { plan_id });
+      } catch (err) {
+        this.log("plan write failed", String(err));
+        return fail("ledger_write_failed", lang);
+      }
+    }
+
+    return { ok: true as const, reference, payment_url, amount_kes, reused, plan_id };
+  }
+
+  private checkPlan(ledger: Ledger, amount: number, plan: Plan, lang: Lang): Failure | null {
+    if (ledger.open_plan) return fail("plan_breaks_rules", lang, "exists");
+    const min = Math.ceil(ledger.due_kes / 2);
+    const rest = ledger.due_kes - amount;
+    const vars = { min, rest: Math.max(ledger.due_kes - min, 0) };
+    if (amount < min) return fail("plan_breaks_rules", lang, undefined, vars);
+    if (rest <= 0 || plan.second_amount_kes !== rest) return fail("plan_breaks_rules", lang, undefined, vars);
+
+    const today = nairobiDate(this.now());
+    const lastDay = `${ledger.month}-${String(PLAN_LAST_DAY).padStart(2, "0")}`;
+    if (today > lastDay) return fail("plan_breaks_rules", lang, "too_late");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(plan.second_date) || plan.second_date < today || plan.second_date > lastDay) {
+      return fail("plan_breaks_rules", lang, "date");
+    }
+    return null;
+  }
+
+  private async createLink(
+    me: Person,
+    month: string,
+    amount_kes: number,
+    existing: Row[],
+    isPlan: boolean,
+  ): Promise<{ reference: string; payment_url: string } | Failure> {
+    const lang = me.language;
+    const unit = me.unit_id;
+    const yyyymm = month.replace("-", "");
+    let n = existing.filter((p) => p.unit_id === unit && p.month === month).length + 1;
+
+    // 1. Reserve the reference in the ledger first, so every Paystack link has a row.
+    let reference = "";
+    try {
+      for (let tries = 0; tries < 5; tries++, n++) {
+        reference = `KDI-${unit}-${yyyymm}-${n}`;
+        const res = await this.store.append("payments", [
+          {
+            reference,
+            unit_id: unit,
+            month,
+            amount_kes: String(amount_kes),
+            status: "pending",
+            from: me.phone,
+            created_at: this.now().toISOString(),
+          },
+        ], "reference");
+        if (res === "ok") break;
+        reference = "";
+      }
+    } catch (err) {
+      this.log("could not reserve reference", String(err));
+      return fail("ledger_write_failed", lang);
+    }
+    if (!reference) return fail("ledger_write_failed", lang);
+
+    // 2. Ask Paystack for the link.
+    let payment_url: string;
+    try {
+      const init = await this.payments.initialize({
+        amountKes: amount_kes,
+        reference,
+        email: `${unit.toLowerCase()}@${this.emailDomain}`,
+        metadata: { building: "Baraka Court", unit_id: unit, month, kind: isPlan ? "plan_first" : "rent" },
+      });
+      payment_url = init.authorization_url;
+    } catch (err) {
+      this.log(`paystack initialize failed for ${reference}`, String(err));
+      await this.store.update("payments", { reference }, { status: "failed" }).catch(() => 0);
+      return fail("paystack_unavailable", lang);
+    }
+
+    // 3. Save the link so it can be reused. If this write fails the link still works.
+    await this.store.update("payments", { reference }, { payment_url }).catch((err) =>
+      this.log(`could not save payment_url for ${reference}`, String(err)),
+    );
+    return { reference, payment_url };
+  }
+
+  // ---- check ---------------------------------------------------------------
+
+  async check(from: string, reference?: string) {
+    const me = await this.identify(from);
+    if (!me) return fail("unknown_sender");
+    const lang = me.language;
+    const isStaff = me.role !== "tenant";
+
+    const payments = await this.store.read("payments");
+    let row: Row | undefined;
+    if (reference) {
+      reference = reference.trim().toUpperCase();
+      row = payments.find((p) => p.reference.toUpperCase() === reference);
+      const unitOfRef = row?.unit_id ?? reference.split("-")[1];
+      if (!isStaff && unitOfRef !== me.unit_id) return fail("not_your_unit", lang);
+      if (!row) return fail("verify_error", lang, "not_found");
+    } else {
+      if (isStaff) return fail("not_allowed", lang, "need_reference");
+      // Rows are appended in time order, so the last one is the newest.
+      row = payments.filter((p) => p.unit_id === me.unit_id && p.status !== "failed").at(-1);
+      if (!row) {
+        const ledger = await this.ledger(me.unit_id);
+        return { ok: true as const, reference: null, status: "none", amount_kes: 0, due_kes_after: ledger.due_kes, already_recorded: false };
+      }
+    }
+
+    const done = async (status: string, amount_kes: number, already_recorded: boolean) => {
+      const ledger = await this.ledger(row!.unit_id);
+      return { ok: true as const, reference: row!.reference, status, amount_kes, due_kes_after: ledger.due_kes, already_recorded };
+    };
+
+    if (row.status === "success") return done("success", toInt(row.paid_kes), true);
+
+    let v: Verified | null;
+    try {
+      v = await this.payments.verify(row.reference);
+    } catch (err) {
+      this.log(`verify failed for ${row.reference}`, String(err));
+      return fail("verify_error", lang);
+    }
+    if (!v) return fail("verify_error", lang, "not_found");
+    if (v.reference && v.reference !== row.reference) {
+      this.log(`verify returned a different reference`, { asked: row.reference, got: v.reference });
+      return fail("verify_error", lang);
+    }
+
+    if (v.status === "success") {
+      if (v.currency && v.currency !== "KES") {
+        this.log(`unexpected currency ${v.currency} for ${row.reference}`);
+        return fail("verify_error", lang);
+      }
+      const rec = await this.recordSuccess(row, v);
+      if (rec === "failed") return fail("ledger_write_failed", lang, "after_payment");
+      return done("success", v.amount / 100, rec === "already");
+    }
+
+    if (["failed", "reversed"].includes(v.status) && row.status !== v.status) {
+      await this.store.update("payments", { reference: row.reference }, { status: v.status }, { status: "success" }).catch(() => 0);
+    }
+    return done(v.status, toInt(row.amount_kes), false);
+  }
+
+  /**
+   * Marks a payment as paid, using the amount Paystack says was paid (data.amount),
+   * never the amount we asked for. The `unless: success` guard in the Sheet means
+   * the same reference can never be recorded twice, even if two checks race.
+   */
+  private async recordSuccess(row: Row, v: Verified): Promise<"recorded" | "already" | "failed"> {
+    let changed: number;
+    try {
+      changed = await this.store.update(
+        "payments",
+        { reference: row.reference },
+        {
+          status: "success",
+          paid_kes: String(v.amount / 100),
+          verified_at: this.now().toISOString(),
+          channel: v.channel,
+        },
+        { status: "success" },
+      );
+    } catch (err) {
+      this.log(`ledger write failed for ${row.reference}`, String(err));
+      return "failed";
+    }
+    if (changed === 0) return "already";
+
+    // If that cleared the month, close any open plan.
+    try {
+      const ledger = await this.ledger(row.unit_id);
+      if (ledger.due_kes <= 0 && ledger.open_plan) {
+        await this.store.update("plans_escalations", { id: ledger.open_plan.plan_id }, { status: "done" });
+      }
+    } catch (err) {
+      this.log("could not close plan", String(err));
+    }
+    return "recorded";
+  }
+
+  // ---- report --------------------------------------------------------------
+
+  async report(from: string, month?: string) {
+    const me = await this.identify(from);
+    if (!me) return fail("unknown_sender");
+    if (me.role === "tenant") return fail("not_allowed", me.language, "report");
+
+    const [units, tenants, charges, payments, plans] = await Promise.all([
+      this.store.read("units"),
+      this.store.read("tenants"),
+      this.store.read("charges"),
+      this.store.read("payments"),
+      this.store.read("plans_escalations"),
+    ]);
+    const current = nairobiMonth(this.now());
+    month ??= charges.map((c) => c.month).filter((m) => m <= current).sort().at(-1) ?? current;
+
+    const billed = charges.filter((c) => c.month === month);
+    let paid_count = 0;
+    let collected_kes = 0;
+    let outstanding_kes = 0;
+    const outstanding: Array<Record<string, unknown>> = [];
+
+    for (const c of billed.sort((a, b) => a.unit_id.localeCompare(b.unit_id))) {
+      const paid = sumPaid(payments, c.unit_id, month);
+      const due = Math.max(0, toInt(c.rent_kes) + toInt(c.carried_kes) - paid);
+      collected_kes += paid;
+      if (due <= 0) {
+        paid_count++;
+        continue;
+      }
+      outstanding_kes += due;
+      const tenant = tenants.find((t) => t.unit_id.toUpperCase() === c.unit_id && t.role.trim().toLowerCase() === "tenant" && isActive(t));
+      const plan = plans.find((p) => p.kind === "plan" && p.unit_id === c.unit_id && p.status === "open");
+      outstanding.push({
+        unit_id: c.unit_id,
+        name: tenant?.name ?? null,
+        due_kes: due,
+        paid_kes: paid,
+        open_plan: plan ? { second_amount_kes: toInt(plan.second_amount_kes), second_date: plan.second_date } : null,
+      });
+    }
+
+    return {
+      ok: true as const,
+      month,
+      units_total: units.length,
+      units_billed: billed.length,
+      paid_count,
+      collected_kes,
+      outstanding_kes,
+      outstanding,
+    };
+  }
+
+  // ---- escalate ------------------------------------------------------------
+
+  async escalate(from: string, reason: string, summary: string, unit_id?: string) {
+    const me = await this.identify(from);
+    if (!me) return fail("unknown_sender");
+    const lang = me.language;
+
+    let unit = unit_id?.trim().toUpperCase() || "";
+    if (me.role === "tenant") {
+      if (unit && unit !== me.unit_id) return fail("not_your_unit", lang);
+      unit = me.unit_id;
+    }
+
+    const now = this.now();
+    const ticket_id = `ESC-${nairobiDate(now).replace(/-/g, "")}-${randomBytes(2).toString("hex").toUpperCase()}`;
+    try {
+      await this.store.append("plans_escalations", [
+        {
+          id: ticket_id,
+          kind: "escalation",
+          unit_id: unit,
+          from: me.phone,
+          month: nairobiMonth(now),
+          status: "open",
+          reason: reason.slice(0, 200),
+          summary: summary.slice(0, 2000),
+          created_at: now.toISOString(),
+        },
+      ], "id");
+    } catch (err) {
+      this.log("escalation write failed", String(err));
+      return fail("ledger_write_failed", lang);
+    }
+    return { ok: true as const, ticket_id };
+  }
+
+  // ---- shared helpers ------------------------------------------------------
+
+  async identify(from: string): Promise<Person | null> {
+    const phone = normalizePhone(from);
+    if (!phone) return null;
+    const tenants = await this.store.read("tenants");
+    const t = tenants.find((r) => normalizePhone(r.phone) === phone && isActive(r));
+    if (!t) return null;
+    const role = t.role.trim().toLowerCase();
+    if (role !== "tenant" && role !== "landlord" && role !== "caretaker") return null;
+    if (role === "tenant" && !t.unit_id) return null;
+    return {
+      phone,
+      name: t.name,
+      role,
+      unit_id: t.unit_id.trim().toUpperCase(),
+      language: t.language.trim().toLowerCase() === "sw" ? "sw" : "en",
+    };
+  }
+
+  private async ledger(unit: string): Promise<Ledger> {
+    const [charges, payments, plans] = await Promise.all([
+      this.store.read("charges"),
+      this.store.read("payments"),
+      this.store.read("plans_escalations"),
+    ]);
+    const current = nairobiMonth(this.now());
+    const mine = charges.filter((c) => c.unit_id.toUpperCase() === unit).sort((a, b) => a.month.localeCompare(b.month));
+    // The latest charge that isn't in the future; fall back to the latest of all.
+    const charge = mine.filter((c) => c.month <= current).at(-1) ?? mine.at(-1);
+    const month = charge?.month ?? current;
+    const amount_kes = toInt(charge?.rent_kes);
+    const carried_kes = toInt(charge?.carried_kes);
+    const paid_kes = sumPaid(payments, unit, month);
+    const plan = plans.find((p) => p.kind === "plan" && p.unit_id === unit && p.status === "open");
+    return {
+      month,
+      amount_kes,
+      carried_kes,
+      paid_kes,
+      due_kes: Math.max(0, amount_kes + carried_kes - paid_kes),
+      open_plan: plan
+        ? {
+            plan_id: plan.id,
+            first_amount_kes: toInt(plan.first_amount_kes),
+            second_amount_kes: toInt(plan.second_amount_kes),
+            second_date: plan.second_date,
+          }
+        : null,
+    };
+  }
+}
+
+// ---- small pure helpers (exported for tests) --------------------------------
+
+/** "+254 712 345 678", "0712345678", "whatsapp:+254712345678" → "254712345678". */
+export function normalizePhone(raw: string | undefined): string {
+  let d = String(raw ?? "").replace(/\D/g, "");
+  if (d.length === 10 && d.startsWith("0")) d = "254" + d.slice(1);
+  if (d.length === 9 && /^[17]/.test(d)) d = "254" + d;
+  return d.length >= 9 ? d : "";
+}
+
+function toInt(v: string | undefined): number {
+  const n = Number(String(v ?? "").replace(/[,\s]|KES/gi, ""));
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
+function isActive(r: Row): boolean {
+  return !/^(no|false|0|inactive)$/i.test((r.active ?? "").trim());
+}
+
+function sumPaid(payments: Row[], unit: string, month: string): number {
+  return payments
+    .filter((p) => p.unit_id === unit && p.month === month && p.status === "success")
+    .reduce((s, p) => s + toInt(p.paid_kes), 0);
+}
+
+// Kenya is UTC+3 all year (no daylight saving), so a fixed offset is exact.
+function nairobi(d: Date): Date {
+  return new Date(d.getTime() + 3 * 3600 * 1000);
+}
+export function nairobiDate(d: Date): string {
+  return nairobi(d).toISOString().slice(0, 10);
+}
+export function nairobiMonth(d: Date): string {
+  return nairobi(d).toISOString().slice(0, 7);
+}
