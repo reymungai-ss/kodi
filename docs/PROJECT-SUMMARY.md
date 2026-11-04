@@ -48,7 +48,7 @@ Anything else becomes a ticket for John. Kodi works in English and Swahili.
 | **Sheet bridge** | Google Apps Script deployed as a web app (no service account needed), protected by a shared secret, with locked writes | `apps-script/Code.gs` |
 | **Payments** | Paystack test mode, using only `POST /transaction/initialize` and `GET /transaction/verify/:reference` | `src/paystack.ts` |
 | **Hosting** | Vercel (Express preset, Node runtime), production domain `kodi-mcp.vercel.app` | `vercel.json`, `.vercelignore` |
-| **Tests** | 31 offline tests (no network), plus a live MCP "smoke test" | `test/flow.test.ts`, `scripts/smoke.ts` |
+| **Tests** | 32 offline tests (no network), plus a live MCP "smoke test" | `test/flow.test.ts`, `scripts/smoke.ts` |
 | **Operations scripts** | `npm run seed` (fill the Sheet with sample data), `npm run reset` (clear test payments, plans and tickets) | `scripts/` |
 | **Docs** | Reviewer README, go-live note for the owner, build log, this summary | `README.md`, `GO-LIVE.md`, `docs/` |
 
@@ -209,7 +209,7 @@ Details, errors and evidence for each are in [BUILD-LOG.md](BUILD-LOG.md), secti
 
 ## 5. Evidence it works
 
-- **Offline:** **31/31 tests** pass (`npm test`). They cover:
+- **Offline:** **32/32 tests** pass (`npm test`). They cover:
   - the main flow and every error code
   - Paystack outages and Sheet write failures
   - races: two simultaneous checks record once
