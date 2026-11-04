@@ -490,7 +490,7 @@ Format for each: **what happened → how the cause was found → fix → what Ch
 
 ## 5. Evidence that it works
 
-- **Offline:** 31/31 tests (`npm test`). They cover the main flow, every error
+- **Offline:** 32/32 tests (`npm test`). They cover the main flow, every error
   code, Paystack outages, Sheet write failures, races, plans, PIN rules, the
   cache and the reset scenario.
 - **Live smoke test** against `kodi-mcp.vercel.app` and the real Sheet and

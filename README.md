@@ -108,7 +108,7 @@ Needs Node.js 20+, a Google Sheet, and a Paystack test secret key.
    ```bash
    npm install
    npm run seed     # creates the 5 tabs with sample data (asks for "yes"; wipes them)
-   npm test         # 31 offline tests: every rule and error code, no network
+   npm test         # 32 offline tests: every rule and error code, no network
    npm run dev      # Kodi on http://localhost:3000/mcp
    npm run smoke    # in a second terminal: live MCP test against the server
    npm run reset    # clears test payments, plans and tickets
