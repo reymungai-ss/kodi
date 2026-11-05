@@ -6,7 +6,7 @@ owe, gets a Paystack link (M-Pesa or card), pays, and Kodi confirms and records
 it in the building's Google Sheet, exactly once. The landlord and caretaker can
 ask who hasn't paid. Anything Kodi can't handle becomes a ticket for a person.
 
-Built for the TSG Labs build exercise. **Role: Product Management.**
+Built for the TSG Labs build exercise. **Role: Product Design / Product Management.**
 
 ```
  WhatsApp (simulator) ──► Chord teammate ──MCP──► Kodi server (Vercel)
